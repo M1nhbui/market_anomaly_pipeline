@@ -1,0 +1,13 @@
+output "bucket_names" {
+  description = "Resolved S3 bucket names. Later slices reference these; copy them when running aws-cli checks by hand."
+  value       = local.bucket_names
+}
+
+output "aws_region" {
+  value = var.aws_region
+}
+
+output "account_id" {
+  description = "Useful for reading IAM errors, which quote account IDs rather than names."
+  value       = data.aws_caller_identity.current.account_id
+}

@@ -1,0 +1,35 @@
+{
+  "interval": "1m",
+  "source_host": "data-api.binance.vision",
+
+  "_note": "Single source of truth for the basket. Terraform reads this file and feeds it to both the ingestion Lambda's environment and the Athena partition-projection enum, so the two can never drift apart. Do not hardcode a symbol list anywhere else.",
+
+  "active": [
+    "BTCUSDT"
+  ],
+
+  "_active_note": "Slice 1-4 run BTCUSDT-only on purpose: one symbol makes dedup and window-function output small enough to verify by eye. Expanded at slice 5.",
+
+  "pending_validation": [
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
+    "LTCUSDT",
+    "ATOMUSDT",
+    "UNIUSDT",
+    "NEARUSDT",
+    "PEPEUSDT",
+    "SHIBUSDT"
+  ],
+
+  "_undecided": {
+    "symbols": ["MATICUSDT", "POLUSDT"],
+    "reason": "Both return HTTP 200 from the klines endpoint, but HTTP 200 only proves the symbol is KNOWN to the exchange, not that it is actively trading. Needs a bar-freshness check before either is admitted. Including a symbol that returns stale bars would poison the freshness DQ check and produce a permanently-flatlined series in the anomaly detector."
+  }
+}

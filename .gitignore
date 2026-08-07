@@ -179,3 +179,21 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# --- Terraform (added at slice 0) ---
+# tfstate can contain resource metadata and, for some providers, secrets in
+# plaintext. It is never committed.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl.bak
+crash.log
+crash.*.log
+
+# tfvars holds your email and any account-specific values.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Terraform plan output can embed variable values.
+*.tfplan

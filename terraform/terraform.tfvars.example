@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+alert_email = "you@example.com"
+
+# Optional overrides:
+# project_name     = "crypto-anomaly"
+# aws_region       = "us-east-1"
+# budget_limit_usd = 10
