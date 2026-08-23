@@ -15,6 +15,7 @@ Using `requests` would buy nicer syntax and cost all of that.
 import json
 import os
 import time
+import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -34,7 +35,13 @@ SYMBOLS = json.loads(os.environ["SYMBOLS"])
 # the exact-fit answer. We ask for 15 on purpose:
 #
 #   - Resilience. A skipped or failed run leaves a hole that the next run backfills.
-#     15 bars tolerates two AR_LIMIT", "15"))
+#     15 bars tolerates two consecutive missed runs with no data loss.
+#   - It makes dedup load-bearing. Roughly two thirds of every response is data we
+#     already have, so Silver's dedup is doing real work on every run rather than
+#     being decorative. That also gives us a genuine duplicate rate to measure.
+#
+# The cost of the overlap is a few KB of S3 per run. Nothing.
+BAR_LIMIT = int(os.environ.get("BAR_LIMIT", "15"))
 
 HTTP_TIMEOUT_SEC = 10
 MAX_ATTEMPTS = 3
@@ -181,7 +188,16 @@ def lambda_handler(event, context):
             # Without this, a single delisted or typo'd symbol fails the invocation
             # and every OTHER symbol's data for that 5-minute window is lost too.
             # The failure is recorded and surfaced in the return value instead.
+            #
+            # KNOWN TRADEOFF: catching bare Exception swallows programming errors
+            # (NameError, TypeError) exactly as it swallows data errors (HTTP 400,
+            # timeout). A bug in a rarely-taken code path would show up as "1 symbol
+            # failed" and be mistaken for a flaky API. The full traceback below is
+            # what makes that distinguishable in CloudWatch - without it the summary
+            # gives you a message with no line number, which is how a one-character
+            # typo can look like a network problem.
             print(f"[{symbol}] FAILED: {type(err).__name__}: {err}")
+            print(traceback.format_exc())
             failed.append({"symbol": symbol, "error": f"{type(err).__name__}: {err}"})
 
     result = {
