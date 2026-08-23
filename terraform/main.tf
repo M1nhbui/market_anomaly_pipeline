@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Zips the Lambda source directory at plan time. Added at slice 1, so
+    # `terraform init` must be re-run to download it.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 
   # State is LOCAL for v1, deliberately.

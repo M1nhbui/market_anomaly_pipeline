@@ -11,3 +11,12 @@ output "account_id" {
   description = "Useful for reading IAM errors, which quote account IDs rather than names."
   value       = data.aws_caller_identity.current.account_id
 }
+
+output "ingestion_function_name" {
+  value = aws_lambda_function.ingestion.function_name
+}
+
+output "active_symbols" {
+  description = "Resolved from config/symbols.json - confirms Terraform read the file you think it did."
+  value       = local.active_symbols
+}

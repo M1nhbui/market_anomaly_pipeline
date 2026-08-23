@@ -197,3 +197,6 @@ crash.*.log
 
 # Terraform plan output can embed variable values.
 *.tfplan
+
+# Terraform build artifacts (lambda zips, generated at plan time)
+terraform/build/
