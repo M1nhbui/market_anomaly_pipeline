@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeIngestionLambdaOnly",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "${ingestion_function_arn}",
+        "${ingestion_function_arn}:*"
+      ]
+    }
+  ]
+}
