@@ -66,7 +66,7 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
 | 3 | Athena `count(*)` on Silver; bytes scanned per query | pending |
 | 4 | Null rate at window edges; feature computation overhead (job duration delta) | pending |
 | 5 | Bars/day across full basket; ingestion success rate; per-symbol failure count | pending |
-| 6 | Anomaly events/day at |z|>3; firing rate as % of bars; **end-to-end latency** | pending |
+| 6 | Anomaly events/day at \|z\|>3; firing rate as % of bars; **end-to-end latency** | pending |
 | 7 | DQ check count; pass/fail counts per run; zero-volume detection rate | pending |
 | 8 | **Two-cadence cost experiment**; state machine success rate | pending |
 | 9 | Month-to-date AWS cost from Cost Explorer | pending |
@@ -116,6 +116,85 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   *the API returns an unfinished bar, and ingesting it without handling produces
   incorrect stored data.* The quantitative version of this becomes available at
   slice 2 as a measured duplicate/correction rate.
+
+### M-006 — Ingestion Lambda duration
+- **Value:** mean **841.7 ms**, min 800.9 ms, max 868.6 ms (n=6 warm invocations)
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23 (six consecutive scheduled runs, 18:23–18:48 UTC)
+- **Parameters:** 1 symbol (BTCUSDT), `limit=15`, 256 MB allocated, python3.12, us-east-1
+- **How:** `aws logs tail /aws/lambda/crypto-anomaly-ingestion --since 30m | grep REPORT`
+- **Raw output:**
+  ```
+  Duration: 868.56 ms  Billed Duration: 869 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  Duration: 836.90 ms  Billed Duration: 837 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  Duration: 800.91 ms  Billed Duration: 801 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  Duration: 838.87 ms  Billed Duration: 839 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  Duration: 862.59 ms  Billed Duration: 863 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  Duration: 842.59 ms  Billed Duration: 843 ms  Memory Size: 256 MB  Max Memory Used: 99 MB
+  ```
+- **Notes:** All six are warm invocations; no cold start is represented in this sample,
+  so this is **not** a p99. Variance is tight (±4%), consistent with a network-bound
+  workload. Per-symbol cost is what matters for the slice-5 projection.
+
+### M-007 — Ingestion Lambda memory utilisation
+- **Value:** **99 MB used of 256 MB allocated** (38.7%), identical across all 6 runs
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23
+- **How:** `Max Memory Used` field of the CloudWatch REPORT line
+- **Notes:** Suggests over-allocation, **but tuning is deliberately deferred to slice 5.**
+  This was measured at 1 symbol; the production config is 17. Re-sizing on a
+  single-symbol measurement would be exactly the kind of estimate-dressed-as-measurement
+  this file exists to prevent. Also note the headroom math: 128 MB would leave only
+  29 MB of margin over the observed 99 MB, so the safe step is 192 MB, not 128 MB.
+
+### M-008 — Bronze object size
+- **Value:** **2.86 KiB per object** (63.0 KiB across 22 objects)
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23
+- **Parameters:** 1 symbol, 15 bars per object, raw JSON, uncompressed
+- **How:** `aws s3 ls s3://crypto-anomaly-bronze-.../ --recursive --human-readable --summarize`
+- **Notes:** Basis for the Bronze storage projection. Do not extrapolate to Silver —
+  Silver is Parquet (columnar, compressed) and will be dramatically smaller per bar,
+  which is itself a measurable comparison at slice 3.
+
+### M-009 — Scheduled ingestion cadence accuracy
+- **Value:** 6 consecutive runs at **exactly 300 s spacing** (18:23:24, 18:28:24,
+  18:33:24, 18:38:24, 18:43:24, 18:48:24 UTC); 0 missed runs
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23 (30-minute observation window)
+- **Parameters:** EventBridge Scheduler, `rate(5 minutes)`, `flexible_time_window = OFF`
+- **Notes:** Confirms `flexible_time_window = OFF` produces exact-time firing. A
+  30-minute window is far too short to claim a reliability figure — revisit after the
+  multi-day metrics window at slice 8.
+
+### M-010 — Unfinished bar present in stored Bronze data
+- **Value:** last bar of a 15-bar response had `close_time` **8.5 s after** `ingested_at`
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23
+- **How:** `close_time` 1787504159999 (16:55:59.999Z) vs `ingested_at` 16:55:51.535Z
+- **Raw output:**
+  ```
+  last bar: [1787504100000, '77406.01', '77412.00', '77406.00', '77412.00',
+             '1.94609000', 1787504159999, '150641.73465930', 525, ...]
+  ingested_at: 2026-08-23T16:55:51.535338Z
+  ```
+- **Notes:** Confirms M-003 in our own pipeline rather than in a probe script. That
+  bar's volume (1.94609) and trade count (525) are partial and Binance will revise
+  them. This is the concrete justification for the Silver rule
+  `drop where close_time >= ingested_at`. Also confirms `limit=15` is behaving: the
+  first and last `open_time` span exactly 14 minutes across 15 bars.
+
+### M-011 — Lambda free-tier headroom (1-symbol basis)
+- **Value:** **~1,818 GB-seconds/month**, or **0.45%** of the 400,000 GB-s always-free
+  allowance; 8,640 invocations/month against 1,000,000 free requests (0.86%)
+- **Label:** DERIVED
+- **Measured on:** 2026-08-23
+- **How:** `8,640 invocations/mo × 0.8417 s (M-006) × 0.25 GB = 1,818 GB-s`
+- **Notes:** Inputs are measured; the projection assumes the observed duration holds.
+  At 17 symbols this rises roughly 17x to ~30,900 GB-s — still under 8% of the free
+  allowance. **Free-tier eligibility itself is an assumption** until confirmed in
+  Cost Explorer, since the account's legacy 12-month tier has expired and only the
+  "always free" component should remain.
 
 ### M-004 — Glue cost per cadence (placeholder, to be replaced)
 - **Value:** hourly cadence ~$42/month; 5-minute cadence ~$507/month; ratio ~12x
