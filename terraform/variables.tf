@@ -31,6 +31,12 @@ variable "budget_limit_usd" {
   default     = 10
 }
 
+variable "ingestion_schedule_enabled" {
+  description = "Master switch for the 5-minute ingestion schedule. Ingestion is cheap (Lambda's always-free tier should cover ~8,600 invocations/month), so this stays on. The expensive Glue schedule is a separate switch added at slice 8."
+  type        = bool
+  default     = true
+}
+
 variable "athena_results_retention_days" {
   description = "Athena writes a result file to S3 for every query, including failed ones. Left alone this grows forever and quietly costs money. 30 days is well past any debugging window."
   type        = number
