@@ -20,3 +20,7 @@ output "active_symbols" {
   description = "Resolved from config/symbols.json - confirms Terraform read the file you think it did."
   value       = local.active_symbols
 }
+
+output "bronze_to_silver_job_name" {
+  value = aws_glue_job.bronze_to_silver.name
+}

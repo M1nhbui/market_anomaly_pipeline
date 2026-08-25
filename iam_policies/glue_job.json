@@ -1,0 +1,89 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadJobScript",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "${artifacts_bucket_arn}/scripts/*"
+    },
+    {
+      "Sid": "GlueScratchSpace",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "${artifacts_bucket_arn}/glue-temp/*"
+    },
+    {
+      "Sid": "ListArtifactsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${artifacts_bucket_arn}"
+    },
+    {
+      "Sid": "ReadBronzeOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "${bronze_bucket_arn}/*"
+    },
+    {
+      "Sid": "ListBronzeForFileDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${bronze_bucket_arn}"
+    },
+    {
+      "Sid": "WriteSilver",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "${silver_bucket_arn}/*"
+    },
+    {
+      "Sid": "ListSilverForOverwrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${silver_bucket_arn}"
+    },
+    {
+      "Sid": "WriteGlueLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:AssociateKmsKey"
+      ],
+      "Resource": "arn:aws:logs:${region}:${account_id}:log-group:/aws-glue/*"
+    },
+    {
+      "Sid": "PublishJobMetrics",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricData"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "cloudwatch:namespace": "Glue"
+        }
+      }
+    }
+  ]
+}

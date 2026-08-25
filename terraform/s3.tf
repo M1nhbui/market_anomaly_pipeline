@@ -11,6 +11,7 @@ locals {
     silver         = "Cleaned - typed - deduplicated bars as Parquet."
     gold           = "Analytics tables and anomaly events as Parquet."
     athena-results = "Athena query output. Ephemeral - expired on a lifecycle rule."
+    artifacts      = "Glue job scripts and Spark scratch space. Code and temp - never data."
   }
 
   bucket_names = {
@@ -111,6 +112,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "layer" {
 
       expiration {
         days = var.athena_results_retention_days
+      }
+    }
+  }
+
+  # Glue's TempDir accumulates shuffle spill and staging files on every run. Glue
+  # does not clean it up for you; left alone it grows forever. Scoped by prefix so
+  # the job SCRIPTS in the same bucket are never touched by this rule.
+  dynamic "rule" {
+    for_each = each.key == "artifacts" ? [1] : []
+
+    content {
+      id     = "expire-glue-temp"
+      status = "Enabled"
+
+      filter {
+        prefix = "glue-temp/"
+      }
+
+      expiration {
+        days = 7
       }
     }
   }
