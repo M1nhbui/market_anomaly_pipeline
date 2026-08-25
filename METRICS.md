@@ -196,6 +196,68 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   Cost Explorer, since the account's legacy 12-month tier has expired and only the
   "always free" component should remain.
 
+### M-012 — Bronze→Silver duplicate rate (the headline dedup number)
+- **Value:** **63.95%** of finished bar records were duplicates
+  (5,110 finished records → 1,842 unique bars; 3,268 removed)
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23
+- **Parameters:** 1 symbol (BTCUSDT), ingestion every 5 min at `limit=15`,
+  dedup key `(symbol, open_time)` ordered by `ingested_at DESC`
+- **How:** local Spark run of `glue_jobs/bronze_to_silver.py` against real Bronze
+  synced from S3; `BRONZE_TO_SILVER_STATS` log line
+- **Raw output:**
+  ```
+  BRONZE_TO_SILVER_STATS {"raw_bar_records": 5475, "unfinished_dropped": 365,
+    "finished_records": 5110, "unique_bars_written": 1842,
+    "duplicates_removed": 3268, "duplicate_rate_pct": 63.95}
+  ```
+- **Notes:** Predicted 60–65% before running, from the overlap arithmetic (fetch 15
+  bars every 5 min ⇒ ~5 new + ~10 repeats per run ⇒ 2/3 duplicates). Measured 63.95%
+  lands inside the predicted band, which is evidence the dedup key is right rather
+  than merely producing a plausible-looking number. **This rate is a property of the
+  chosen `limit=15` overlap, not of the data** — quoting it without that parameter
+  would be misleading.
+
+### M-013 — Unfinished bars removed
+- **Value:** **365 of 5,475** raw bar records (6.67%) were in-progress candles
+- **Label:** MEASURED
+- **Measured on:** 2026-08-23
+- **How:** same run as M-012, `unfinished_dropped` field
+- **Notes:** 365 is exactly the number of ingestion documents in the sample — one
+  unfinished bar per API response, precisely as expected since Binance always
+  returns the currently-forming candle last. The arithmetic agreeing this cleanly is
+  a strong signal the filter is doing what it claims. Confirms M-003 and M-010
+  quantitatively. Had these not been dropped, 6.67% of Silver would carry partial
+  volume and trade counts — directly feeding false positives into the volume
+  z-score at slice 6.
+
+### M-014 — Small-file overhead in the Silver write layout
+- **Value:** at 17 symbols × 7 days (119 partition directories):
+  **476 files → 119 files**, total size **4,674 KiB → 4,267 KiB** (**8.7% saved**),
+  average file size 9.8 KiB → 35.9 KiB
+- **Label:** MEASURED (synthetic data at production scale)
+- **Measured on:** 2026-08-23
+- **Parameters:** Spark 3.5.3 local, AQE enabled, `spark.sql.shuffle.partitions=200`,
+  comparing default write vs `repartition("symbol","date")` before write
+- **How:** benchmark writing the same DataFrame three ways and counting
+  `*.parquet` files plus total bytes on disk
+- **Raw output:**
+  ```
+  as-written (AQE on)             files=476    total=  4673.9 KiB  avg=  9.82 KiB
+  coalesce(1)                     files=119    total=  4267.1 KiB  avg= 35.86 KiB
+  repartition('symbol','date')    files=119    total=  4267.2 KiB  avg= 35.86 KiB
+  as-written (AQE OFF)            files=23776  total= 33055.9 KiB  avg=  1.39 KiB
+  ```
+- **Notes:** Data volume is **synthetic**, generated to match the production shape
+  (17 symbols × 7 days × 1440 bars). The file counts and the ratio are real
+  measurements of Spark's write behaviour; the byte totals are representative, not
+  from live market data. The AQE-off row is the counterfactual showing what the
+  default would cost without Adaptive Query Execution: 7.8x storage bloat.
+  `coalesce(1)` and `repartition` measured identically at this scale;
+  `repartition` was chosen because `coalesce(1)` serialises the write through one
+  task and will not scale. Change originated as a review suggestion from the
+  operator, not from the original design.
+
 ### M-004 — Glue cost per cadence (placeholder, to be replaced)
 - **Value:** hourly cadence ~$42/month; 5-minute cadence ~$507/month; ratio ~12x
 - **Label:** ESTIMATED — **not resume-eligible**

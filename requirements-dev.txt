@@ -1,0 +1,16 @@
+# Local development only. NONE of this is deployed to AWS.
+#
+# The ingestion Lambda uses only the standard library plus boto3 (preinstalled in the
+# Lambda runtime), and the Glue job runs against Glue's own bundled Spark. These
+# packages exist so the Spark transforms can be developed and tested on a laptop in
+# seconds instead of via 2-3 minute Glue runs at ~$0.03 each.
+
+# Pinned to match AWS Glue 5.0, which ships Spark 3.5.
+#
+# Version matching matters more than it looks: window function semantics, the
+# datetime parser, and Parquet writer defaults have all changed between Spark
+# majors. Testing on Spark 4 and deploying to Spark 3.5 would mean the local suite
+# is validating different behaviour than production runs.
+pyspark==3.5.3
+
+pytest>=8.0

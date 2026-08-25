@@ -200,3 +200,10 @@ crash.*.log
 
 # Terraform build artifacts (lambda zips, generated at plan time)
 terraform/build/
+
+# Local Spark / pytest artifacts
+.pytest_cache/
+__pycache__/
+spark-warehouse/
+metastore_db/
+derby.log
