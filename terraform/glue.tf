@@ -43,6 +43,20 @@ resource "aws_iam_role" "glue_job" {
 # The absence of Delete on Bronze is the enforcement mechanism for immutability. It
 # is not a convention we are trusting ourselves to honour; the permission does not
 # exist, so a bug cannot violate it.
+#
+# ONE HARD-WON DETAIL: the scratch-space resource is "glue-temp*", NOT "glue-temp/*".
+#
+# S3 has no directories - it is a flat key-value store. Hadoop and Spark were written
+# for filesystems that do, so the S3 connector fakes them by writing zero-byte marker
+# objects named "<prefix>_$folder$". The first write into the scratch prefix therefore
+# tries to PutObject on the key "glue-temp_$folder$", which is a SIBLING of
+# "glue-temp/..." and does not match a "glue-temp/*" pattern. Result: a 403 that
+# names a key you never asked anything to create.
+#
+# Dropping the slash covers both the markers and the real objects. The scripts/
+# prefix keeps its own read-only statement, so the job still cannot overwrite its own
+# source code - a property worth preserving deliberately rather than losing to a
+# broader wildcard.
 resource "aws_iam_role_policy" "glue_job" {
   name = "${var.project_name}-glue-job-policy"
   role = aws_iam_role.glue_job.id
