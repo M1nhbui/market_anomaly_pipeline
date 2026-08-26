@@ -258,9 +258,69 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   task and will not scale. Change originated as a review suggestion from the
   operator, not from the original design.
 
-### M-004 — Glue cost per cadence (placeholder, to be replaced)
+### M-015 — Glue job execution time (first production run)
+- **Value:** **90 seconds**, 2 workers, state SUCCEEDED
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **Parameters:** Glue 5.0, 2 × G.1X (2 DPU), input 607 Bronze documents /
+  9,105 bar records, output 3,052 rows
+- **How:** `aws glue get-job-run --job-name crypto-anomaly-bronze-to-silver --run-id <id>`
+- **Raw output:**
+  ```
+  {"State": "SUCCEEDED", "ExecutionSeconds": 90, "Workers": 2, "Error": null}
+  ```
+- **Notes:** n=1. A single run is not a distribution — cold-start variance on Glue is
+  real. Needs 3–5 runs before quoting as a typical figure.
+
+### M-016 — Measured Glue cost per run, and the cadence comparison
+- **Value:** **$0.022 per job run**. Hourly cadence: **$31.68/month** for both jobs.
+  5-minute cadence: **$380.16/month**. Ratio **12.0x**.
+- **Label:** DERIVED
+- **Measured on:** 2026-08-25
+- **How:** `90 s ÷ 3600 × 2 DPU × $0.44/DPU-hr = $0.022/run`
+  Hourly: `$0.022 × 720 runs × 2 jobs = $31.68/mo`
+  5-minute: `$0.022 × 8,640 runs × 2 jobs = $380.16/mo`
+- **Notes:** **Supersedes M-004**, which estimated $42/mo hourly. The estimate was
+  **33% too high** because it assumed 2-minute runs; actual is 90 s.
+  **One assumption remains unmeasured and it is load-bearing:** this treats per-run
+  cost as constant across cadences. That holds only if execution time is dominated
+  by startup rather than data volume — plausible at 3,052 rows, but *assumed*, not
+  shown. Until the 5-minute-window run is measured (slice 8, or the cheap version
+  below), the 12.0x figure is arithmetic on one measured data point, not an
+  experimental result. Do not put "12x" on a resume until both durations are measured.
+
+### M-017 — Duplicate rate reproduced on Glue
+- **Value:** **64.09%** (8,498 finished records → 3,052 unique; 5,446 removed)
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **How:** `BRONZE_TO_SILVER_STATS` in CloudWatch `/aws-glue/jobs/output`
+- **Raw output:**
+  ```
+  {"raw_bar_records": 9105, "unfinished_dropped": 607, "finished_records": 8498,
+   "unique_bars_written": 3052, "duplicates_removed": 5446, "duplicate_rate_pct": 64.09}
+  ```
+- **Notes:** Local run on a smaller sample measured 63.95% (M-012); Glue on 1.7x the
+  data measured 64.09%. The 0.14 pp difference across a different runtime, different
+  Spark deployment, and a larger sample is strong evidence the dedup logic is
+  deterministic rather than incidentally correct. `unfinished_dropped` = 607 = exactly
+  the number of Bronze documents, again one unfinished candle per API response.
+
+### M-018 — Ingestion completeness (provisional)
+- **Value:** **3,052 unique bars** against an expected ~3,055 minutes of elapsed
+  coverage ⇒ **≥99.9%** bar completeness
+- **Label:** DERIVED — **provisional, not yet verified**
+- **Measured on:** 2026-08-25
+- **How:** first observed bar 2026-08-23 16:41 UTC; job ran 2026-08-25 19:36 UTC;
+  elapsed ≈ 3,055 one-minute bars; measured unique = 3,052
+- **Notes:** The 3-bar shortfall is **not yet explained**. Candidates: the excluded
+  in-progress bar at each boundary, genuinely untraded minutes, or missed ingestion
+  runs. These have different implications and this figure must not be quoted until
+  they are distinguished. A proper gap query in Athena at slice 3 will settle it —
+  that is exactly the "sequence gaps" DQ check from README §11.
+
+### M-004 — Glue cost per cadence (SUPERSEDED by M-015 / M-016)
 - **Value:** hourly cadence ~$42/month; 5-minute cadence ~$507/month; ratio ~12x
-- **Label:** ESTIMATED — **not resume-eligible**
+- **Label:** ESTIMATED — **not resume-eligible; superseded 2026-08-25**
 - **Estimated on:** 2026-08-07
 - **Parameters:** 2 Glue jobs per cycle, 2 DPU per job (2× G.1X, the ETL minimum),
   assumed 2 min execution per run, $0.44/DPU-hour, 1-minute minimum billing

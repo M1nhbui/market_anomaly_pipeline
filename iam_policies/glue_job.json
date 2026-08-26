@@ -10,14 +10,14 @@
       "Resource": "${artifacts_bucket_arn}/scripts/*"
     },
     {
-      "Sid": "GlueScratchSpace",
+      "Sid": "GlueScratchSpaceIncludingHadoopDirectoryMarkers",
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
         "s3:PutObject",
         "s3:DeleteObject"
       ],
-      "Resource": "${artifacts_bucket_arn}/glue-temp/*"
+      "Resource": "${artifacts_bucket_arn}/glue-temp*"
     },
     {
       "Sid": "ListArtifactsBucket",
