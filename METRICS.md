@@ -289,6 +289,69 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   below), the 12.0x figure is arithmetic on one measured data point, not an
   experimental result. Do not put "12x" on a resume until both durations are measured.
 
+### M-019 — Glue execution time is startup-dominated (the two-cadence experiment)
+- **Value:** **90 s** on 607 Bronze documents (9,105 bar records) vs **94 s** on
+  ~12 documents (~180 bar records). A **50× input reduction changed runtime by
+  −4.4%** — and in the slower direction.
+- **Label:** MEASURED (n=1 per arm)
+- **Measured on:** 2026-08-25
+- **Parameters:** identical job, Glue 5.0, 2 × G.1X, only `--bronze-path` differed;
+  small-arm output redirected to scratch to avoid partition-overwriting real Silver
+- **How:** two `aws glue start-job-run` invocations, `ExecutionTime` from
+  `aws glue get-job-run`
+- **Raw output:**
+  ```
+  full dataset : {"State": "SUCCEEDED", "ExecutionSeconds": 90}
+  one hour     : {"State": "SUCCEEDED", "ExecutionSeconds": 94}
+  ```
+- **Notes:** This is the load-bearing measurement behind the two-cadence design.
+  Runtime is dominated by cluster startup, Spark session init, and S3 listing, not by
+  computation — so per-run cost is effectively constant and **run frequency is the
+  only cost lever.** n=1 per arm; the 4 s gap is within plausible run-to-run
+  variance and should not be read as the small job being genuinely slower. Three
+  runs per arm would make this a distribution rather than two points.
+
+### M-020 — Two-cadence cost saving (MEASURED both sides)
+- **Value:** hourly **$33.09/month** vs 5-minute **$397.10/month** ⇒ **12.0×**
+- **Label:** DERIVED (from measured durations on both arms)
+- **Measured on:** 2026-08-25
+- **How:** `94 s ÷ 3600 × 2 DPU × $0.44 = $0.02298/run`
+  hourly `× 720 × 2 jobs = $33.09`; 5-min `× 8,640 × 2 jobs = $397.10`
+- **Notes:** Supersedes M-016's provisional 12.0× and removes its unmeasured
+  assumption — M-019 demonstrates rather than assumes that per-run cost holds across
+  cadences. The multiple equals the run-count ratio exactly *because* runtime is
+  volume-independent; that causal link is the interesting part, not the number.
+  README §12 estimated "~10x" with no measurement behind it. **Resume-eligible**,
+  provided the method is stated: two Glue runs differing only in input size.
+
+### M-021 — Bronze → Silver storage reduction, decomposed
+- **Value:** **8.95× total** (1,748 KiB Bronze JSON → 195.3 KiB Silver Parquet),
+  decomposing into **2.98× from record elimination** (dedup + unfinished-bar removal)
+  and **3.00× from format change** (JSON → Parquet/Snappy).
+  Per unit: **196.6 bytes per Bronze bar record → 65.5 bytes per Silver row.**
+- **Label:** DERIVED (from measured byte counts and record counts)
+- **Measured on:** 2026-08-25
+- **How:**
+  ```
+  Bronze total : 2,067,180 bytes / 701 objects = 2,948.9 bytes per object
+  At job time  : 607 objects × 2,948.9        = 1,789,982 bytes  (1,748 KiB)
+  Silver       : 30.3 + 90.9 + 74.1 KiB       =   199,987 bytes  (195.3 KiB)
+  Total        : 1,789,982 / 199,987          = 8.95×
+  Records      : 9,105 / 3,052                = 2.98×
+  Format       : 8.95 / 2.98                  = 3.00×
+  ```
+- **Notes:** Bronze had grown to 701 objects by the time it was measured, so the
+  607-object figure is **reconstructed from the measured per-object average**, not
+  read directly. That reconstruction is the weakest link here; a clean version would
+  snapshot both totals in the same minute.
+  The 3.00× "format" factor is **not pure compression.** It bundles Snappy-compressed
+  columnar encoding, dropping Binance's unused `ignore` and `taker_buy_quote` fields,
+  and eliminating the per-document JSON envelope — partly offset by Silver *adding*
+  `close_time`, `ingested_at`, and `source_host` to every row. Calling it "3× Parquet
+  compression" would overstate what the format alone contributes.
+  Full-day partition check: 90.9 KiB ÷ 1,440 bars = **64.6 bytes/bar**, consistent
+  with the 65.5 bytes/row overall — encoding efficiency is stable across partitions.
+
 ### M-017 — Duplicate rate reproduced on Glue
 - **Value:** **64.09%** (8,498 finished records → 3,052 unique; 5,446 removed)
 - **Label:** MEASURED
