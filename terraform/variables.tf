@@ -31,6 +31,12 @@ variable "budget_limit_usd" {
   default     = 10
 }
 
+variable "projection_start_date" {
+  description = "Earliest date Athena's partition projection will consider, yyyy-MM-dd. Set it to roughly when ingestion began. Too early wastes query-planning time on paths that never existed; too late makes real data invisible with no error."
+  type        = string
+  default     = "2026-08-23"
+}
+
 variable "ingestion_schedule_enabled" {
   description = "Master switch for the 5-minute ingestion schedule. Ingestion is cheap (Lambda's always-free tier should cover ~8,600 invocations/month), so this stays on. The expensive Glue schedule is a separate switch added at slice 8."
   type        = bool

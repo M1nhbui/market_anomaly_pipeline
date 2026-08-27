@@ -24,3 +24,12 @@ output "active_symbols" {
 output "bronze_to_silver_job_name" {
   value = aws_glue_job.bronze_to_silver.name
 }
+
+output "silver_table" {
+  description = "Fully qualified table name for Athena queries."
+  value       = "${aws_glue_catalog_database.silver.name}.${aws_glue_catalog_table.clean_bars.name}"
+}
+
+output "athena_workgroup" {
+  value = aws_athena_workgroup.main.name
+}
