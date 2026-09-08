@@ -247,6 +247,136 @@ def deduplicate(df):
     )
 
 
+# Volatility window length, in bars. 20 one-minute bars = 20 minutes of history.
+#
+# Stated as an explicit constant because it is a MODELLING CHOICE, not a fact.
+# Shorter reacts faster and is noisier; longer is smoother and slower to respond.
+# README §10 calls these out as "tunable knobs that should be stated explicitly
+# rather than hidden," and this is where that promise gets kept.
+VOL_WINDOW_BARS = 20
+BAR_INTERVAL_SECONDS = 60
+
+
+def add_derived_features(
+    df, vol_window=VOL_WINDOW_BARS, interval_seconds=BAR_INTERVAL_SECONDS
+):
+    """
+    Derive log_return, rolling_vol, dollar_volume, range_pct.
+
+    MUST RUN AFTER DEDUPLICATION. lag() reaches to the physically previous row in
+    the window, so if duplicates were still present it would compare a bar against
+    another copy of itself and produce a log_return of 0. Every one of these features
+    is only meaningful on a deduplicated series.
+
+    TIME-BASED WINDOWS, NOT ROW-BASED
+    ---------------------------------
+    The obvious implementation uses rowsBetween(-19, 0): "the previous 20 rows."
+    That is what most tutorials do and it is subtly wrong.
+
+    A row-based window counts ROWS, not TIME. If a minute is missing, the "trailing
+    20 bars" silently span 21 minutes of wall-clock instead of 20 — and nothing tells
+    you. The volatility of a 21-minute span gets recorded as a 20-minute figure, and
+    downstream comparisons between symbols quietly stop being apples-to-apples.
+
+    rangeBetween operates on the ORDERING COLUMN'S VALUE. Ordering by open_time cast
+    to epoch seconds and bounding by -(N-1)*60 gives a genuine 20-MINUTE window. If
+    a bar is missing, the window honestly contains 19 observations and we null the
+    result rather than pretending.
+
+    On our current data these are identical, because ingestion has zero gaps
+    (METRICS.md M-022). That is exactly why it is worth doing now: we can prove the
+    two agree today, and the time-based one stays correct when that changes.
+    README §19 lists this as a future improvement; it is cheap enough to do in v1.
+
+    THE WARM-UP PERIOD
+    ------------------
+    Spark will happily compute stddev over 3 observations and return a number. That
+    number is not comparable to one computed over 20, and feeding it into a z-score
+    produces confident-looking nonsense for the first minutes of every symbol.
+
+    So we count actual observations in the window and return NULL unless the window
+    is full. NULL, not 0 — README §10 is explicit that undefined z-scores "must be
+    excluded, not treated as zero," and 0 would read as "no volatility," which is the
+    single most misleading value available.
+
+    Note the arithmetic: rolling_vol first becomes non-null at the 21st bar, not the
+    20th. The first bar has no log_return (no previous close), so 21 closes are
+    required to produce 20 returns.
+    """
+    # lag() ignores the frame, so a plain ordered window is all it needs.
+    time_ordered = Window.partitionBy("symbol").orderBy(F.col("open_time").cast("long"))
+
+    previous_close = F.lag(F.col("close")).over(time_ordered)
+
+    # ln(close / previous_close).
+    #
+    # Log returns rather than simple percentage returns because they are additive
+    # over time (the sum of log returns is the log return of the whole period) and
+    # roughly symmetric — a +1% and a −1% move have equal and opposite log returns,
+    # whereas simple returns do not. Both properties matter for the z-score in Gold.
+    #
+    # The guards are not paranoia: a zero or negative price would make the logarithm
+    # undefined or produce -Infinity, which propagates silently through every
+    # downstream aggregate. NULL is loud; -Infinity is not.
+    df = df.withColumn(
+        "log_return",
+        F.when(
+            previous_close.isNotNull()
+            & (previous_close > 0)
+            & (F.col("close") > 0),
+            F.log(F.col("close") / previous_close),
+        ),
+    )
+
+    trailing_window = (
+        Window.partitionBy("symbol")
+        .orderBy(F.col("open_time").cast("long"))
+        .rangeBetween(-(vol_window - 1) * interval_seconds, 0)
+    )
+
+    # count() ignores NULLs, so this is the number of REAL return observations in
+    # the trailing time span - which is what "is the window full?" actually means.
+    observations_in_window = F.count(F.col("log_return")).over(trailing_window)
+
+    # stddev_samp (n-1 denominator), stated explicitly rather than relying on
+    # F.stddev's default. With n=20 the sample and population estimators differ by
+    # sqrt(20/19) ≈ 2.6% - small, but it would be silently baked into every z-score
+    # downstream. Sample is the convention for financial volatility because the
+    # window is a sample of the return process, not the entire population.
+    df = df.withColumn(
+        "rolling_vol",
+        F.when(
+            observations_in_window >= vol_window,
+            F.stddev_samp(F.col("log_return")).over(trailing_window),
+        ),
+    )
+
+    # close × volume, as specified in README §9.
+    #
+    # HONEST CAVEAT: this is an APPROXIMATION and Binance already gives us the exact
+    # figure. `volume` is base-asset quantity (BTC), so close × volume values every
+    # trade in the minute at the CLOSING price. `quote_volume` is Binance's actual
+    # sum of price × quantity across the real trades - the true USDT turnover.
+    #
+    # We compute it anyway for README fidelity and because it is the conventional
+    # field name, but quote_volume is strictly better and downstream consumers should
+    # prefer it. The size of the discrepancy is measurable in Athena and worth
+    # recording rather than assuming.
+    df = df.withColumn("dollar_volume", F.col("close") * F.col("volume"))
+
+    # (high − low) / open. Intrabar range as a fraction of the opening price.
+    # Guarded because a zero open would divide by zero; NULL is the honest answer.
+    df = df.withColumn(
+        "range_pct",
+        F.when(
+            F.col("open") > 0,
+            (F.col("high") - F.col("low")) / F.col("open"),
+        ),
+    )
+
+    return df
+
+
 def add_partition_column(df):
     """
     Silver partitions by (symbol, date) where date comes from the BAR's open_time -
@@ -264,10 +394,33 @@ def add_partition_column(df):
 
 
 def transform(df_bronze):
-    """The whole Bronze -> Silver pipeline, composed. Pure: DataFrame in, out."""
-    return add_partition_column(
-        deduplicate(drop_unfinished_bars(cast_bars(explode_bars(df_bronze))))
-    )
+    """
+    The whole Bronze -> Silver pipeline, composed. Pure: DataFrame in, out.
+
+    STAGE ORDER IS LOAD-BEARING, specifically that features come after dedup:
+
+        explode -> cast -> drop unfinished -> DEDUPLICATE -> features -> partition
+
+    Deriving features before deduplication would let lag() compare a bar against a
+    duplicate copy of itself, yielding log_return = 0 and a collapsed rolling_vol.
+    The job would succeed and the numbers would be wrong.
+    """
+    return finalize(drop_unfinished_bars(cast_bars(explode_bars(df_bronze))))
+
+
+def finalize(df_finished):
+    """
+    The post-filter stages, in one place.
+
+    This exists because run() needs to interleave row counts between the early
+    stages, so it cannot simply call transform(). Previously both functions composed
+    the stage list independently - and when add_derived_features was introduced, only
+    one of them was updated. The job then asked for columns that were never created.
+
+    Any stage ordering that both callers must agree on belongs here, so there is
+    exactly one definition of it to keep correct.
+    """
+    return add_partition_column(add_derived_features(deduplicate(df_finished)))
 
 
 # -----------------------------------------------------------------------------
@@ -286,6 +439,14 @@ SILVER_COLUMNS = [
     "quote_volume",
     "num_trades",
     "taker_buy_base",
+    # Derived (slice 4). Column ORDER here must stay in sync with the column list in
+    # terraform/catalog.tf, or rather - it need not, because the table is configured
+    # with parquet.column.index.access = false, so Athena matches by name. Adding a
+    # column here still requires adding it there, or it simply will not be queryable.
+    "log_return",
+    "rolling_vol",
+    "dollar_volume",
+    "range_pct",
     "ingested_at",
     "source_host",
     "date",
@@ -313,9 +474,21 @@ def run(spark, bronze_path, silver_path):
     finished.cache()
     finished_records = finished.count()
 
-    silver = add_partition_column(deduplicate(finished)).select(*SILVER_COLUMNS)
+    silver = finalize(finished).select(*SILVER_COLUMNS)
     silver.cache()
     unique_bars = silver.count()
+
+    # Feature warm-up counts, in one pass rather than three separate count() actions.
+    #
+    # These are not diagnostics for their own sake. A NULL rolling_vol means "we did
+    # not have 20 observations of return history here", and every such row is a row
+    # the Gold anomaly detector must skip rather than score. Knowing how many there
+    # are is how we confirm the warm-up behaves as designed instead of silently
+    # nulling far more than expected.
+    null_counts = silver.select(
+        F.sum(F.when(F.col("log_return").isNull(), 1).otherwise(0)).alias("lr"),
+        F.sum(F.when(F.col("rolling_vol").isNull(), 1).otherwise(0)).alias("rv"),
+    ).collect()[0]
 
     stats = {
         "raw_bar_records": raw_bar_records,
@@ -328,6 +501,9 @@ def run(spark, bronze_path, silver_path):
             if finished_records
             else 0.0
         ),
+        "null_log_return": int(null_counts["lr"] or 0),
+        "null_rolling_vol": int(null_counts["rv"] or 0),
+        "vol_window_bars": VOL_WINDOW_BARS,
     }
 
     # Dynamic partition overwrite: replace only the (symbol, date) partitions this

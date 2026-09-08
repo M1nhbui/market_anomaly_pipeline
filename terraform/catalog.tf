@@ -34,6 +34,14 @@ locals {
     { name = "quote_volume", type = "double", comment = "Quote asset (USDT) volume." },
     { name = "num_trades", type = "int", comment = "Trade count. 0 indicates an untraded minute." },
     { name = "taker_buy_base", type = "double", comment = "Taker buy base volume." },
+
+    # Derived features (slice 4). All nullable by design - see the comments in
+    # add_derived_features(). NULL here means "not computable", never "zero".
+    { name = "log_return", type = "double", comment = "ln(close/prev_close). NULL on a symbol's first bar." },
+    { name = "rolling_vol", type = "double", comment = "stddev_samp(log_return) over a trailing 20-MINUTE window. NULL until 20 return observations exist." },
+    { name = "dollar_volume", type = "double", comment = "close * volume. Approximate - prefer quote_volume, which is Binance's exact USDT turnover." },
+    { name = "range_pct", type = "double", comment = "(high-low)/open. NULL if open <= 0." },
+
     { name = "ingested_at", type = "timestamp", comment = "When this version was fetched. Dedup tie-break." },
     { name = "source_host", type = "string", comment = "Lineage: which Binance host served it." },
   ]

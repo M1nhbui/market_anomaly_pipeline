@@ -368,18 +368,182 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   deterministic rather than incidentally correct. `unfinished_dropped` = 607 = exactly
   the number of Bronze documents, again one unfinished candle per API response.
 
-### M-018 — Ingestion completeness (provisional)
-- **Value:** **3,052 unique bars** against an expected ~3,055 minutes of elapsed
-  coverage ⇒ **≥99.9%** bar completeness
-- **Label:** DERIVED — **provisional, not yet verified**
+### M-018 — Ingestion completeness (SUPERSEDED — the shortfall was my arithmetic error)
+- **Value:** ~~3 missing bars, ≥99.9% completeness~~ — **retracted**
+- **Label:** DERIVED — **withdrawn 2026-08-25**
+- **Notes:** The "3 missing bars" were an error in the *expected* figure, not a real
+  shortfall. I computed elapsed minutes using the Glue job's start time (19:36:23) as
+  the endpoint, but Silver's newest bar necessarily lags that: the last ingestion ran
+  ~19:33, and its final bar was in-progress and therefore dropped by design. Correct
+  endpoint is 19:32. Superseded by M-022, which measures 100.000%.
+  Kept rather than deleted because "the metric was wrong before the data was" is
+  worth remembering — the error was in the baseline, not the pipeline.
+
+### M-028 — Feature warm-up NULLs are exactly as designed (and detect gaps)
+- **Value:** of 23,327 bars: **1 NULL `log_return`**, **20 NULL `rolling_vol`**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-08
+- **Parameters:** BTCUSDT, `VOL_WINDOW_BARS = 20`, time-based `rangeBetween` window
+- **How:** `SELECT COUNT(*), COUNT(log_return), COUNT(rolling_vol) FROM ... clean_bars`
+- **Raw output:**
+  ```
+  bars   with_return  with_vol
+  23327  23326        23307
+  ```
+- **Notes:** Predicted 1 and 20 before running; both exact. One NULL return = one
+  symbol with no prior close. Twenty NULL volatilities = the warm-up and nothing else.
+  **Second-order finding:** because the window is TIME-based, any gap in the minute
+  sequence would under-fill the window for ~20 subsequent bars and add NULLs. There
+  are exactly 20. So this doubles as a gap check and extends M-022's zero-gap result
+  from 50 hours to **16.2 days / 23,327 bars**.
+
+### M-029 — Glue runtime scales with Bronze volume above ~600 documents
+- **Value:** **205 s** at 4,688 Bronze documents, vs 90 s at ~607 and 94 s at ~12.
+  Implied: **~90 s startup floor + ~0.028 s per document** beyond it.
+- **Label:** MEASURED (three points); the linear fit is ESTIMATED
+- **Measured on:** 2026-09-08
+- **Parameters:** full reprocess, Glue 5.0, 2 × G.1X, 4,688 docs / 13.75 MB Bronze
+- **How:** `ExecutionTime` from `aws glue get-job-run`; Bronze count from
+  `aws s3 ls --recursive --summarize`
+- **Notes:** **PARTIALLY CORRECTS M-019.** "Execution time is volume-independent" was
+  true only within the narrow range measured (12–607 docs, all below the startup
+  floor's shadow). With a third point 8× further out, volume clearly matters.
+  A caution about the earlier conclusion rather than a refutation: M-020's 12.0×
+  cadence multiple still holds, because *both* cadences read a bounded lookback in
+  the final design — but the multiple was derived under an assumption that only
+  survives if incremental processing exists.
+  **Projection (ESTIMATED, linear fit on 3 points, and S3 listing is often
+  superlinear so this may be optimistic):**
+  ```
+  1 symbol,  day 30   ~8,600 docs   ~5 min
+  1 symbol,  day 90  ~26,000 docs  ~13 min
+  17 symbols, today  ~79,700 docs  ~39 min   <-- exceeds the 15-minute job timeout
+  ```
+  **Consequence: slice 4.5 (incremental) is blocking for slice 5 (17 symbols),** not
+  merely well-sequenced. Full reprocess would fail outright on the full basket.
+
+### M-030 — Return distribution is heavily fat-tailed (sets slice 6 expectations)
+- **Value:** mean |log_return| **3.354 bps**, mean `rolling_vol` **4.396 bps**,
+  max |log_return| **142.84 bps** = **32.5× typical volatility**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-08
+- **Parameters:** BTCUSDT, 23,326 one-minute log returns, 16.2 days
+- **Notes:** Under a normal distribution the largest of 23,327 draws sits near 4σ.
+  Observing 32.5σ is overwhelming evidence of fat tails, not a near-miss.
+  Internal consistency check: for a normal distribution E|X| = σ√(2/π) ≈ 0.798σ, so
+  mean |return| of 3.354 bps implies σ ≈ 4.20 bps against a measured mean
+  `rolling_vol` of 4.396 bps — close, with the excess in the direction fat tails
+  predict.
+  **Direct consequence for slice 6:** a |z| > 3 threshold will fire far more often
+  than the ~0.27% normal theory implies. Not a bug — a property of the data. But it
+  means `anomaly_events` will not be the "short, ranked list" README §2 describes,
+  and the **measured** firing rate must replace the theoretical one in the README.
+
+### M-031 — Bronze growth rate
+- **Value:** **4,688 objects / 13,748,973 bytes** after 16.2 days at 1 symbol
+  ⇒ **2,932 bytes/object**, **~289 objects and ~847 KB per day per symbol**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-08
+- **How:** `aws s3 ls s3://crypto-anomaly-bronze-.../ --recursive --summarize`
+- **Notes:** Per-object size is stable across the whole history (2,932 bytes now vs
+  2,949 measured at 701 objects vs 2,860 at 22). Extrapolating to 17 symbols:
+  ~4,900 objects and ~14 MB per day, ~430 MB/month of Bronze. Storage cost is
+  negligible (~1¢/month); the **object count** is what drives the runtime problem
+  in M-029.
+
+### M-027 — Athena scan reduction, decomposed (columnar vs partition pruning)
+- **Value:** **26.6× fewer bytes scanned**, decomposing into **12.6× from columnar
+  storage** and **2.10× from partition pruning**
+- **Label:** MEASURED (all three arms)
 - **Measured on:** 2026-08-25
-- **How:** first observed bar 2026-08-23 16:41 UTC; job ran 2026-08-25 19:36 UTC;
-  elapsed ≈ 3,055 one-minute bars; measured unique = 3,052
-- **Notes:** The 3-bar shortfall is **not yet explained**. Candidates: the excluded
-  in-progress bar at each boundary, genuinely untraded minutes, or missed ingestion
-  runs. These have different implications and this figure must not be quoted until
-  they are distinguished. A proper gap query in Athena at slice 3 will settle it —
-  that is exactly the "sequence gaps" DQ check from README §11.
+- **Parameters:** BTCUSDT, 3,052 rows, 3 date partitions, 195.3 KiB Parquet/Snappy
+- **How:** `DataScannedInBytes` from `aws athena get-query-execution` for three queries
+- **Raw output:**
+  ```
+  all 12 columns, all partitions  (12 × MAX(...))            190,301 bytes
+  one column,     all partitions  (AVG(close))                15,050 bytes
+  one column,     one partition   (AVG(close) WHERE "date")    7,153 bytes
+  ```
+  ```
+  columnar  : 190,301 / 15,050 = 12.64×
+  pruning   :  15,050 /  7,153 =  2.10×
+  combined  : 190,301 /  7,153 = 26.60×      (12.64 × 2.10 = 26.6 ✓)
+  ```
+- **Notes:** The 2.10× pruning figure has independent corroboration: the
+  `date=2026-08-24` partition is 90.9 KiB of 195.3 KiB on disk = **46.5%**, and the
+  scan ratio was 7,153/15,050 = **47.5%**. Two unrelated measurements agreeing.
+  **CRITICAL CAVEAT FOR ANY COST CLAIM:** Athena bills a **10 MB minimum per query**.
+  At 190 KB, all three of these queries cost *exactly the same*. The ratio is real and
+  is what matters at scale — at 17 symbols over a year it is the difference between a
+  ~$2 and a ~$56 query — but **it is saving zero dollars today.** Quoting a scan
+  ratio on a 200 KB dataset as realised cost savings would be overclaiming.
+  The two effects are independent and multiply: columnar comes from Parquet,
+  pruning from the `symbol`/`date` partition layout.
+
+### M-022 — Sequence completeness: zero gaps
+- **Value:** **0 missing minutes** across 3,052 consecutive bars.
+  `bars_present` = `bars_expected` = **3,052** ⇒ **100.000%**
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **Parameters:** BTCUSDT, 2026-08-23 16:41:00 → 2026-08-25 19:32:00 UTC (~50.9 h)
+- **How:** Athena `LAG(open_time) OVER (PARTITION BY symbol ORDER BY open_time)`,
+  filtering `date_diff('minute', prev, cur) > 1`
+- **Raw output:**
+  ```
+  symbol  prev_open_time  open_time  gap_minutes
+  (0 rows)
+
+  symbol   bars  first_bar                last_bar                 expected
+  BTCUSDT  3052  2026-08-23 16:41:00.000  2026-08-25 19:32:00.000  3052
+  ```
+- **Notes:** Two independent queries agree — no gap between any consecutive pair,
+  and the count matches the expected span exactly. **Scope: 50.9 hours, one symbol.**
+  This is not a long-run reliability claim and must not be quoted as uptime. Whether
+  this reflects zero ingestion failures or failures healed by the 15-bar overlap is a
+  separate question, answered by the Lambda `Errors` metric (pending).
+
+### M-023 — Dedup verified against stored data
+- **Value:** **0 rows** where `(symbol, open_time)` appears more than once
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **How:** `GROUP BY symbol, open_time HAVING COUNT(*) > 1` in Athena
+- **Notes:** Distinct from M-017. That was the Spark job reporting on its own work;
+  this interrogates the written artifact through a different engine entirely. The
+  dedup key holds in the data, not just in the log line.
+
+### M-024 — OHLC integrity
+- **Value:** **0 violations** across 3,052 bars — no `high < low`, no `high` below
+  open/close, no `low` above open/close
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **How:** aggregate CASE query in Athena (query 6 of `queries/silver_checks.sql`)
+- **Notes:** Confirms the positional-index mapping in `cast_bars()` is correct. A
+  mis-indexed array — reading `high` from position 3 instead of 2, say — would
+  produce OHLC violations at scale immediately. Zero across 3,052 bars is meaningful
+  evidence the Bronze→Silver contract is right.
+
+### M-025 — Silver freshness lag (sets the DQ gate threshold)
+- **Value:** newest Silver bar `open_time` was **4 min 23 s** behind the Glue job's
+  start time (bar 19:32:00 vs job at 19:36:23); ~3 min 23 s behind that bar's close
+- **Label:** MEASURED (n=1)
+- **Measured on:** 2026-08-25
+- **Notes:** This lag is **structural, not a defect.** It is the sum of the 5-minute
+  ingestion interval and the deliberate exclusion of the in-progress candle.
+  **Directly determines the DQ gate's freshness threshold at slice 7:** README §11
+  specifies "latest bar within one interval of now," which at 1-minute bars would
+  fail on every single run. A ~15-minute threshold leaves room for this 4.4-minute
+  structural lag plus one missed ingestion cycle. n=1; worth re-measuring across
+  several runs before fixing the constant.
+
+### M-026 — Zero-trade bars: none yet, and why that matters
+- **Value:** **0 bars** with `num_trades = 0` out of 3,052 (BTCUSDT)
+- **Label:** MEASURED
+- **Measured on:** 2026-08-25
+- **Notes:** Expected — BTCUSDT trades every minute. The consequence is planning, not
+  data: **the DQ gate's empty-bar check cannot be tested until the basket expands.**
+  PEPEUSDT and SHIBUSDT are in the basket partly to produce these. Until slice 5 that
+  check would be dead code validated only by unit tests, which is worth knowing
+  before writing it.
 
 ### M-004 — Glue cost per cadence (SUPERSEDED by M-015 / M-016)
 - **Value:** hourly cadence ~$42/month; 5-minute cadence ~$507/month; ratio ~12x
