@@ -31,6 +31,35 @@ variable "budget_limit_usd" {
   default     = 10
 }
 
+variable "zscore_window_bars" {
+  description = <<-EOT
+    Trailing window, in bars, for the Gold anomaly z-score baseline.
+
+    A MODELLING CHOICE, not a fact. Shorter reacts faster and is noisier; longer is
+    smoother and slower to respond. 60 one-minute bars = one hour of baseline.
+
+    Deliberately different from Silver's 20-bar rolling_vol window: that one is a
+    feature describing recent volatility, this one is a baseline for judging whether
+    a single observation is unusual, and the second job wants a more stable estimate.
+  EOT
+  type        = number
+  default     = 60
+}
+
+variable "zscore_threshold" {
+  description = <<-EOT
+    |z| above which a bar is emitted as an anomaly event.
+
+    3.0 implies ~0.27% of observations under a NORMAL distribution. Minute-level
+    crypto returns are nothing like normal - the largest move measured so far is
+    32.5 standard deviations (METRICS.md M-030), where normal theory would put the
+    maximum of 23,000 draws near 4. Expect the real firing rate to be far above
+    0.27%, and expect to report the MEASURED rate rather than the theoretical one.
+  EOT
+  type        = number
+  default     = 3.0
+}
+
 variable "glue_job_timeout_minutes" {
   description = <<-EOT
     Hard ceiling on a Glue job run, in minutes.

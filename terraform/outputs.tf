@@ -33,3 +33,11 @@ output "silver_table" {
 output "athena_workgroup" {
   value = aws_athena_workgroup.main.name
 }
+
+output "silver_to_gold_job_name" {
+  value = aws_glue_job.silver_to_gold.name
+}
+
+output "anomaly_events_table" {
+  value = "${aws_glue_catalog_database.gold.name}.${aws_glue_catalog_table.anomaly_events.name}"
+}

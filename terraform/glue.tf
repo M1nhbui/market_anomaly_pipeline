@@ -65,6 +65,7 @@ resource "aws_iam_role_policy" "glue_job" {
     artifacts_bucket_arn = aws_s3_bucket.layer["artifacts"].arn
     bronze_bucket_arn    = aws_s3_bucket.layer["bronze"].arn
     silver_bucket_arn    = aws_s3_bucket.layer["silver"].arn
+    gold_bucket_arn      = aws_s3_bucket.layer["gold"].arn
     region               = var.aws_region
     account_id           = data.aws_caller_identity.current.account_id
   })
@@ -155,6 +156,60 @@ resource "aws_glue_job" "bronze_to_silver" {
     # Streams driver and executor logs to CloudWatch as the job runs rather than
     # only at the end. When a job hangs, this is the difference between watching
     # where it stopped and staring at an empty log group.
+    "--enable-continuous-cloudwatch-log" = "true"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Silver -> Gold: anomaly_events
+# -----------------------------------------------------------------------------
+
+resource "aws_s3_object" "silver_to_gold_script" {
+  bucket = aws_s3_bucket.layer["artifacts"].id
+  key    = "scripts/silver_to_gold.py"
+  source = "${path.module}/../glue_jobs/silver_to_gold.py"
+  etag   = filemd5("${path.module}/../glue_jobs/silver_to_gold.py")
+}
+
+resource "aws_glue_job" "silver_to_gold" {
+  name        = "${var.project_name}-silver-to-gold"
+  description = "Per-symbol trailing z-scores on returns and log-volume. Silver -> Gold."
+  role_arn    = aws_iam_role.glue_job.arn
+
+  glue_version      = "5.0"
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  timeout           = var.glue_job_timeout_minutes
+  max_retries       = 0
+
+  # Same reasoning as bronze_to_silver: dynamic partition overwrite is not atomic on
+  # plain Parquet, so two concurrent runs could leave a date partition half-replaced
+  # with no error reported.
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  command {
+    name            = "glueetl"
+    python_version  = "3"
+    script_location = "s3://${aws_s3_bucket.layer["artifacts"].id}/${aws_s3_object.silver_to_gold_script.key}"
+  }
+
+  default_arguments = {
+    "--silver-path" = "s3://${aws_s3_bucket.layer["silver"].id}/"
+    "--gold-path"   = "s3://${aws_s3_bucket.layer["gold"].id}/anomaly_events/"
+
+    # The two knobs README §10 insists should be explicit rather than hidden. They
+    # are also written onto every emitted row, so events produced under different
+    # settings stay distinguishable inside one table.
+    "--zscore-window-bars" = tostring(var.zscore_window_bars)
+    "--zscore-threshold"   = tostring(var.zscore_threshold)
+
+    "--TempDir"                          = "s3://${aws_s3_bucket.layer["artifacts"].id}/glue-temp/"
+    "--job-language"                     = "python"
+    "--enable-metrics"                   = "true"
+    "--enable-spark-ui"                  = "false"
+    "--job-bookmark-option"              = "job-bookmark-disable"
     "--enable-continuous-cloudwatch-log" = "true"
   }
 }

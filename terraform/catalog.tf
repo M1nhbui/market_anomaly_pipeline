@@ -47,6 +47,87 @@ locals {
   ]
 }
 
+locals {
+  # anomaly_events. Partition key `date` is declared separately, as always.
+  gold_anomaly_columns = [
+    { name = "symbol", type = "string", comment = "Trading pair." },
+    { name = "event_time", type = "timestamp", comment = "open_time of the flagged bar, UTC." },
+    { name = "rule", type = "string", comment = "return_zscore | volume_zscore" },
+    { name = "rule_direction", type = "string", comment = "both (abs(z) > k) | upper (z > k). Returns are two-sided - a crash is as anomalous as a spike. Volume is upper-tail only: the lower tail was flagging untraded minutes as 'anomalously low volume', which is illiquidity, not an event." },
+    { name = "observed_value", type = "double", comment = "The value actually scored - see observed_transform." },
+    { name = "observed_transform", type = "string", comment = "none (log_return) | log1p (volume). Volume is log-transformed because a z-score on raw, right-skewed, non-negative volume puts its lower bound below zero." },
+    { name = "rolling_mean", type = "double", comment = "Baseline mean over the trailing window, EXCLUDING this bar." },
+    { name = "rolling_std", type = "double", comment = "Baseline sample stddev over the same window." },
+    { name = "zscore", type = "double", comment = "(observed - rolling_mean) / rolling_std. Signed: negative means an unusually large DOWN move." },
+    { name = "close_price", type = "double", comment = "Price context at the event." },
+    { name = "volume", type = "double", comment = "RAW volume for context, untransformed." },
+    { name = "num_trades", type = "int", comment = "Trade count context. 0 indicates an untraded minute." },
+    { name = "zscore_window_bars", type = "int", comment = "Window length that produced this row." },
+    { name = "zscore_threshold", type = "double", comment = "k that produced this row. Stored per-row so events from different parameter choices stay distinguishable." },
+  ]
+}
+
+resource "aws_glue_catalog_database" "gold" {
+  name        = "${local.db_prefix}_gold"
+  description = "Analytics tables and the anomaly signal."
+}
+
+resource "aws_glue_catalog_table" "anomaly_events" {
+  name          = "anomaly_events"
+  database_name = aws_glue_catalog_database.gold.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    EXTERNAL              = "TRUE"
+    classification        = "parquet"
+    "parquet.compression" = "SNAPPY"
+
+    # Projected on `date` only - no `symbol`.
+    #
+    # anomaly_events is SPARSE: a few hundred rows a day across all 17 symbols,
+    # versus Silver's ~24,000. Partitioning by symbol as well would create 17 files
+    # a day of a few KB each, and per-file overhead would exceed anything pruning
+    # could save. Partition granularity should follow row counts, not habit.
+    "projection.enabled"            = "true"
+    "projection.date.type"          = "date"
+    "projection.date.range"         = "${var.projection_start_date},NOW"
+    "projection.date.format"        = "yyyy-MM-dd"
+    "projection.date.interval"      = "1"
+    "projection.date.interval.unit" = "DAYS"
+
+    "storage.location.template" = "s3://${aws_s3_bucket.layer["gold"].id}/anomaly_events/date=$${date}"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.layer["gold"].id}/anomaly_events/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "parquet.column.index.access" = "false"
+      }
+    }
+
+    dynamic "columns" {
+      for_each = local.gold_anomaly_columns
+
+      content {
+        name    = columns.value.name
+        type    = columns.value.type
+        comment = columns.value.comment
+      }
+    }
+  }
+
+  partition_keys {
+    name    = "date"
+    type    = "string"
+    comment = "Event date (UTC). Reserved word in Athena SQL - quote it."
+  }
+}
+
 resource "aws_glue_catalog_database" "silver" {
   name        = "${local.db_prefix}_silver"
   description = "Cleaned, typed, deduplicated market bars."

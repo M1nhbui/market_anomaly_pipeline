@@ -62,6 +62,24 @@
       "Resource": "${silver_bucket_arn}"
     },
     {
+      "Sid": "WriteGold",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "${gold_bucket_arn}/*"
+    },
+    {
+      "Sid": "ListGoldForOverwrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${gold_bucket_arn}"
+    },
+    {
       "Sid": "WriteGlueLogs",
       "Effect": "Allow",
       "Action": [
