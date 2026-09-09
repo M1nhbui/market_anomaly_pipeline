@@ -46,12 +46,50 @@ BAR_LIMIT = int(os.environ.get("BAR_LIMIT", "15"))
 HTTP_TIMEOUT_SEC = 10
 MAX_ATTEMPTS = 3
 
+# Stop retrying once fewer than this many milliseconds of Lambda time remain.
+#
+# WHY THIS EXISTS (measured, not hypothetical - METRICS.md M-038):
+# At 17 symbols a normal run takes ~10.7s of the 60s timeout. But the retry path is
+# unbounded: MAX_ATTEMPTS = 3 means two backoff sleeps per symbol, each honouring
+# Retry-After up to a 20s cap, so a broad HTTP 429 event costs
+#   17 symbols x 2 sleeps x 20s = 680s
+# against a 60-second timeout.
+#
+# Lambda does not fail gracefully when it runs out of time - it is killed. The
+# handler never returns, the structured failure report is never printed, and the
+# partial results already collected are lost. Sleeping into that is strictly worse
+# than giving up early: the next scheduled run is 5 minutes away and the 15-bar
+# overlap backfills anything this run missed.
+SAFETY_MARGIN_MS = 5000
+
 
 class RateLimitBan(Exception):
     """HTTP 418: Binance has temporarily IP-banned us. Stop immediately."""
 
 
-def fetch_klines(symbol):
+class OutOfTime(Exception):
+    """Not enough Lambda time left to retry safely. Defer to the next run."""
+
+
+def sleep_if_affordable(seconds, remaining_ms, symbol, reason):
+    """
+    Sleep only if doing so leaves SAFETY_MARGIN_MS of headroom.
+
+    remaining_ms is Lambda's own context.get_remaining_time_in_millis, which is
+    authoritative - better than computing a deadline ourselves from a start time,
+    because it accounts for whatever the runtime has already spent.
+    """
+    if remaining_ms is not None:
+        available = remaining_ms() - SAFETY_MARGIN_MS
+        if seconds * 1000 > available:
+            raise OutOfTime(
+                f"{symbol}: {reason} needs {seconds}s but only "
+                f"{max(available, 0) / 1000:.1f}s of usable time remains"
+            )
+    time.sleep(seconds)
+
+
+def fetch_klines(symbol, remaining_ms=None):
     """
     GET one symbol's recent bars, with backoff.
 
@@ -94,7 +132,7 @@ def fetch_klines(symbol):
                 # our remaining Lambda time, sleeping is pointless.
                 wait_sec = min(int(err.headers.get("Retry-After", 2**attempt)), 20)
                 print(f"[{symbol}] HTTP 429, honouring Retry-After={wait_sec}s")
-                time.sleep(wait_sec)
+                sleep_if_affordable(wait_sec, remaining_ms, symbol, "Retry-After")
                 last_error = err
                 continue
 
@@ -107,7 +145,7 @@ def fetch_klines(symbol):
             if attempt < MAX_ATTEMPTS - 1:
                 backoff = 2**attempt
                 print(f"[{symbol}] transient error ({err}), retrying in {backoff}s")
-                time.sleep(backoff)
+                sleep_if_affordable(backoff, remaining_ms, symbol, "backoff")
 
     raise RuntimeError(f"{symbol}: exhausted {MAX_ATTEMPTS} attempts") from last_error
 
@@ -144,11 +182,15 @@ def lambda_handler(event, context):
     ingested_at = datetime.now(timezone.utc)
     request_id = getattr(context, "aws_request_id", "local")
 
-    succeeded, failed, total_bars = [], [], 0
+    # Lambda's own countdown, if we are running in Lambda. None when invoked locally
+    # or from a test, in which case the time guard is simply inactive.
+    remaining_ms = getattr(context, "get_remaining_time_in_millis", None)
+
+    succeeded, failed, total_bars, deferred = [], [], 0, []
 
     for symbol in SYMBOLS:
         try:
-            bars = fetch_klines(symbol)
+            bars = fetch_klines(symbol, remaining_ms=remaining_ms)
 
             # One object per symbol per run. Every field outside "bars" is metadata
             # we are adding; "bars" itself is byte-for-byte what Binance returned.
@@ -182,6 +224,18 @@ def lambda_handler(event, context):
             print(f"FATAL: {err}")
             raise
 
+        except OutOfTime as err:
+            # Out of usable time. Record every REMAINING symbol as deferred and stop
+            # cleanly, so the handler still returns a structured result. Continuing
+            # would mean Lambda kills us mid-loop and we lose the report entirely.
+            #
+            # Nothing is actually lost: the next run is 5 minutes away and fetches 15
+            # bars, so the overlap backfills whatever this run skipped.
+            remaining_symbols = SYMBOLS[SYMBOLS.index(symbol):]
+            print(f"DEFERRING {len(remaining_symbols)} symbol(s): {err}")
+            deferred = remaining_symbols
+            break
+
         except Exception as err:  # noqa: BLE001 - deliberate catch-all, see below
             # One bad symbol must not take down the batch.
             #
@@ -205,8 +259,10 @@ def lambda_handler(event, context):
         "symbols_attempted": len(SYMBOLS),
         "symbols_succeeded": len(succeeded),
         "symbols_failed": len(failed),
+        "symbols_deferred": len(deferred),
         "bars_written": total_bars,
         "failures": failed,
+        "deferred": deferred,
     }
     print(json.dumps(result))
 

@@ -54,6 +54,112 @@ it does. See README §4.
 
 ---
 
+## Metrics taxonomy — the full collection plan
+
+Capture broadly now, select for the resume at the end. A metric that turns out to be
+uninteresting costs one command; a metric you wish you had recorded three weeks ago
+costs three weeks.
+
+Organising principle: at this data scale, **volume metrics are the weakest thing to
+lead with** ("processed 730K rows" invites "that's a spreadsheet"). What persuades is
+evidence the data is *correct*, and evidence a tradeoff was *measured* rather than
+assumed. Secondary filter: **prefer deterministic metrics.** Glue runtime varies
+enough at n=1 to be noise; bytes read does not vary at all.
+
+### A. Correctness — "how do you know the data is right?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Duplicate rate removed by dedup | ✅ M-012, M-017 | job stats line |
+| Duplicate keys in stored output | ✅ M-023 | Athena `GROUP BY ... HAVING COUNT(*) > 1` |
+| Sequence gaps | ✅ M-022, M-028 | Athena `LAG(open_time)` |
+| OHLC integrity violations | ⚠️ M-024 at 3,052 rows — **re-run at current scale** | Athena CASE aggregate |
+| Unfinished bars removed | ✅ M-013 | job stats line |
+| NULL rates match designed warm-up | ✅ M-028 | `COUNT(col)` vs `COUNT(*)` |
+| Cross-engine agreement (Spark vs Athena) | ✅ M-017 vs M-023 | compare job log to SQL |
+| **Idempotency: re-run → identical output** | ❌ **high value, cheap** | run job twice unchanged, diff per-date counts + checksums |
+| Full-reprocess vs incremental equality in prod | ⚠️ unit-tested only | reprocess to scratch, `EXCEPT` both ways |
+| Monotonic timestamps per symbol | ❌ | Athena `LAG` with `>=` check |
+| Price continuity (no impossible jumps) | ❌ | Athena, flag `|log_return|` above a threshold |
+
+### B. Cost — "what does it cost and what drives it?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Cost per Glue run | ✅ M-016 | `ExecutionTime` × DPU × rate |
+| Two-cadence saving | ✅ M-020 | run-count ratio × per-run cost |
+| Dominant cost driver identified | ✅ | reasoning + Cost Explorer |
+| Actual month-to-date spend | ❌ **pending** | Cost Explorer, filter tag `Project` |
+| Cost per million rows processed | ❌ | normalises across scale; comparable figure |
+| Cost per GB scanned in Athena | ❌ | `DataScannedInBytes` × $5/TB |
+| Failed-run cost | ⚠️ noted informally | failures bill too — 103 s failure = $0.025 |
+| Storage cost per month | ❌ | S3 bytes × $0.023/GB |
+
+### C. Latency / freshness — "how fresh is the data?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Structural freshness lag | ⚠️ M-025, n=1 | job run time − `MAX(open_time)` |
+| **End-to-end p50 / p95 / max** | ❌ slice 8 | bar `open_time` → queryable in Gold, ≥20 samples |
+| Lag by design vs lag by failure | ❌ | distinguishing these is the point |
+| Ingestion-to-Bronze latency | ❌ | `ingested_at` − bar `close_time` |
+
+### D. Reliability — "does it stay up?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Lambda error count | ⚠️ 2 errors, **unattributed** | CloudWatch `Errors`, hourly buckets |
+| Run success rate (needs denominator) | ❌ | `Errors` ÷ `Invocations` |
+| Self-healing evidence from overlap | ❌ | errors > 0 AND gaps = 0 |
+| Data completeness over time | ✅ M-022 | gap query |
+| Glue job success rate | ❌ | `get-job-runs` state histogram |
+| DQ gate pass/fail history | ❌ slice 7 | per-run JSON written to S3 |
+
+### E. Efficiency / scaling — "does it scale?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Storage reduction Bronze→Silver | ✅ M-021 | byte counts, decomposed |
+| Athena scan reduction | ✅ M-027 | `DataScannedInBytes`, three arms |
+| Files per partition | ✅ M-014 | object count ÷ partition count |
+| **Read amplification (bytes read per new bar)** | ❌ **high value, deterministic** | bytes read ÷ new rows produced, full vs incremental |
+| Rows/sec/DPU throughput | ❌ | rows ÷ (ExecutionTime × DPU) |
+| Runtime vs input size curve | ⚠️ M-029/M-034 — **model not trustworthy** | needs ≥3 runs per point |
+| Bronze growth rate | ✅ M-031 | object count and bytes over time |
+
+### F. Operability — "could someone else run this?"
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Test count | ✅ 27 | pytest |
+| Tests verified by mutation testing | ✅ | deliberately break code, confirm failures |
+| Manual steps to deploy | ✅ zero beyond `terraform apply` | — |
+| Recovery path exercised | ❌ | actually rebuild Silver from Bronze, time it |
+| Time from clone to running | ❌ | wall-clock a fresh `apply` |
+| Infrastructure resource count | ❌ | `terraform state list \| wc -l` |
+
+### G. Signal quality — specific to the anomaly layer (slice 6)
+
+| Metric | Status | How to capture |
+|---|---|---|
+| Anomaly firing rate at \|z\| > 3 | ❌ | count ÷ total bars, per day |
+| Firing rate vs normal-theory expectation | ❌ | measured vs 0.27%; M-030 predicts a large gap |
+| **Composition of firings** | ❌ **the honest-framing metric** | split genuine moves / DQ artifacts / scheduled volatility |
+| Rate stability across days | ❌ | daily counts, coefficient of variation |
+| Sensitivity to `k` and window length | ❌ | firing rate at k = 2, 3, 4, 5 |
+| Precision / recall | 🚫 **NOT AVAILABLE** | no labels. Claiming it would breach the honesty boundary. |
+
+### Claims to avoid
+
+- **Raw volume as an achievement.** Context, never headline.
+- **Unrealised cost savings.** The 26.6× Athena scan reduction is real but saves $0
+  today because of the 10 MB per-query minimum. Design property, not a P&L line.
+- **Uptime or SLA figures** from a few weeks of data.
+- **Any implication the anomaly signal has predictive value.**
+- **Percentage improvements against a baseline nobody would have chosen.**
+
+---
+
 ## Measurement schedule
 
 What becomes measurable at each slice. Nothing is filled in until it is actually run.
@@ -378,6 +484,186 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   endpoint is 19:32. Superseded by M-022, which measures 100.000%.
   Kept rather than deleted because "the metric was wrong before the data was" is
   worth remembering — the error was in the baseline, not the pipeline.
+
+### M-037 — Warm-up invariant holds identically across all 17 symbols
+- **Value:** **every one of 17 symbols has exactly 20 NULL `rolling_vol`** — the 16
+  newly added symbols and BTCUSDT alike, despite BTCUSDT having 24,377 bars and the
+  others 634
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **How:** Athena `SELECT symbol, COUNT(*), COUNT(rolling_vol) ... GROUP BY symbol`
+- **Raw output:**
+  ```
+  BTCUSDT   24377  24357   -> 20 NULL
+  ADAUSDT     634    614   -> 20 NULL
+  ... all 17 symbols: bars - with_vol = 20
+  ```
+- **Notes:** Predicted "+20 NULL per new symbol" before running; confirmed for all 16.
+  This is **17 independent confirmations of the same invariant** — a symbol beginning
+  its history today warms up exactly as BTCUSDT did seventeen days ago, and adding
+  symbols did not disturb the existing one (BTCUSDT still exactly 20).
+  Also confirms `partitionBy("symbol")` isolates the series correctly: without it,
+  the first bar of each new symbol would have computed a return against a different
+  asset's price, and the NULL counts would not be uniform.
+
+### M-038 — Ingestion Lambda at 17 symbols
+- **Value:** **10,746 ms** mean (vs 738 ms at 1 symbol) ⇒ **113 ms fixed overhead +
+  625 ms marginal per symbol**. Memory **99 MB, unchanged from 1 symbol.**
+- **Label:** MEASURED (n=2 at 17 symbols, n=3 at 1 symbol)
+- **Measured on:** 2026-09-09
+- **How:** CloudWatch REPORT lines before and after the basket expansion
+- **Raw output:**
+  ```
+  1 symbol :  763.57 / 714.11 / 736.43 ms      Max Memory Used: 99 MB
+  17 symbols: 10804.72 (cold, init 470ms) / 10687.27 ms   Max Memory Used: 99 / 98 MB
+  ```
+- **Notes:** Predicted ~14,300 ms by scaling the 1-symbol figure linearly; actual is
+  **25% faster**, because the 738 ms single-symbol time included ~113 ms of fixed
+  per-invocation overhead that does not repeat. Linear extrapolation from a
+  measurement containing fixed costs overstates — a small lesson worth keeping.
+  **Memory closes out M-007:** 99 MB at both 1 and 17 symbols confirms memory does
+  not scale with basket size, since symbols are processed one at a time rather than
+  accumulated. **Recommendation: leave `memory_size` at 256 MB.** Reducing it would
+  save nothing — 23,211 GB-s/month is 5.8% of the always-free 400,000 allowance — and
+  headroom costs nothing. Tuning here would be optimisation theatre.
+- **RISK IDENTIFIED (not yet mitigated):** timeout utilisation is a comfortable
+  10.7 s of 60 s, **but the retry path is not bounded.** With `MAX_ATTEMPTS = 3` and a
+  20-second cap on honouring `Retry-After`, a broad HTTP 429 event could cost
+  `17 symbols × 2 sleeps × 20 s = 680 s` against a 60-second timeout. The function
+  would be killed mid-batch with no return value and no structured failure report.
+  Fix: a run-level deadline that stops retrying as the timeout approaches.
+
+### M-039 — Empty-bar rates over a real sample (sets the DQ threshold)
+- **Value:** over 634 bars per symbol — **SHIBUSDT 1.89%** (12), **ATOMUSDT 0.63%**
+  (4), **ADAUSDT 0.16%** (1), all other 14 symbols **0%**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09 (~10.6 hours of coverage per new symbol)
+- **How:** Athena `SUM(CASE WHEN num_trades = 0 THEN 1 ELSE 0 END) GROUP BY symbol`
+- **Notes:** Supersedes M-036's 30-bar snapshot, which suggested ~3.4% for three
+  symbols. Over a 21× larger sample the real rate is lower and concentrated in
+  SHIBUSDT. **PEPEUSDT shows 0%** — contrary to the expectation that both meme pairs
+  would be the illiquid ones; PEPE is evidently the more actively traded of the two.
+  **Slice 7 design input:** README §11 specifies flagging `num_trades = 0`. A hard
+  fail on any empty bar would trip on SHIBUSDT constantly. The check must be a
+  per-symbol **ratio with a tolerance**, and on this evidence the tolerance belongs
+  around 5% — comfortably above the observed 1.89% but low enough to catch a genuine
+  feed failure.
+  **Caveat: 10.6 hours does not include a full overnight cycle**, when liquidity is
+  thinnest and rates will be worse. Re-measure across a full 24 hours before fixing
+  the constant.
+
+### M-040 — Glue runtime at 17 symbols (partial history)
+- **Value:** **178 s** (2m58s) reading ~2,900 Bronze documents across 17 symbols
+- **Label:** MEASURED (n=1)
+- **Measured on:** 2026-09-09
+- **Parameters:** incremental, 3-hour lookback; BTCUSDT has full history, the other
+  16 symbols only ~10.6 hours, so the 3-day lookback is not yet full for them
+- **Notes:** Against 150 s at ~600 documents (1 symbol). My earlier projection for
+  17 symbols was ~487 s; the trajectory now suggests ~320 s at steady state — but
+  **both figures come from a runtime model that has been wrong twice**, and the
+  operator has correctly observed Glue timing is nondeterministic at n=1. Treat as
+  directional only.
+  **Testable prediction: runtime will RISE over the next ~3 days** as the new symbols
+  accumulate enough history to fill the 3-day lookback window, then plateau. That
+  plateau is the number worth measuring — everything before it understates.
+  Comfortably inside the 25-minute timeout either way.
+
+### M-035 — Delisted symbol caught by bar-freshness validation
+- **Value:** **1 of 18 candidates rejected.** MATICUSDT returned HTTP 200 with a
+  newest closed bar **1,049,854 minutes (729 days) old**; 17 symbols admitted.
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Parameters:** newest closed bar under 15 min old, plus nonzero trading activity
+  across the last 30 bars
+- **How:** `python3 scripts/validate_basket.py`
+- **Raw output:**
+  ```
+  MATICUSDT  NO   1049854.0  100.0  524  STALE - newest closed bar is 1049854 min old
+  POLUSDT    YES        0.0   96.6 1482  ok
+  ADMITTED (17)   REJECTED (1): ['MATICUSDT']
+  ```
+- **Notes:** Corresponds to Polygon's MATIC→POL migration (~Sept 2024). **The earlier
+  status-only probe reported "18/18 symbols OK" and would have admitted it** — HTTP
+  200 proves a symbol is *known* to the exchange, not that it is *trading*.
+  Concrete consequence had it been admitted: ingestion would refetch the same 15
+  bars from 2024 every 5 minutes forever; Silver would file them under
+  `date=2024-09-11`, outside the partition-projection range and therefore **invisible
+  to Athena**; and the DQ freshness check would fail permanently on that symbol. A
+  silent failure with no error surface anywhere.
+  README §18 still lists MATICUSDT and needs correcting (slice 9).
+
+### M-036 — Empty-bar rate for less liquid symbols (unblocks the DQ gate design)
+- **Value:** **96.6% of the last 30 bars traded** for ATOMUSDT, POLUSDT and SHIBUSDT
+  — i.e. **~3.4% untraded minutes.** BTCUSDT and the majors: 100%.
+- **Label:** MEASURED (n=30 bars per symbol, single point in time)
+- **Measured on:** 2026-09-09
+- **How:** `scripts/validate_basket.py`, `traded%` column
+- **Notes:** Supersedes M-026's "cannot test until the basket expands" — the case is
+  visible already. **Directly sets a design constraint for slice 7:** README §11
+  specifies flagging `num_trades = 0`, but a hard fail on any empty bar would trip on
+  roughly 1 bar in 30 for three of the seventeen symbols, firing constantly and
+  training the operator to ignore the alert. The check must be a **ratio with a
+  tolerance**, and the tolerance must sit above ~3.4%.
+  Caveat: 30 bars at one moment is a small sample and liquidity varies by hour —
+  overnight rates will be worse. Re-measure across a full day before fixing the
+  threshold.
+
+### M-032 — Incremental processing verified non-destructive on production data
+- **Value:** **16 of 17 date partitions byte-identical** before and after an
+  incremental run. Only `2026-09-08` changed (1,288 → 1,440 bars, completing the
+  day) and `2026-09-09` was created (113 bars).
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Parameters:** `--lookback-hours 3`, targets `[2026-09-08, 2026-09-09]`,
+  warm-up read of `2026-09-07`; 23,327 → 23,592 rows (+265 bars = 4.42 h elapsed)
+- **How:** identical `GROUP BY "date"` Athena query run immediately before and after
+- **Raw output:**
+  ```
+  before: 08-23:439/419  08-24..09-07: 1440/1440 each  09-08: 1288/1288
+  after : 08-23:439/419  08-24..09-07: 1440/1440 each  09-08: 1440/1440  09-09: 113/113
+  ```
+- **Notes:** This is the property the design exists to guarantee: dynamic partition
+  overwrite replaces WHOLE `(symbol, date)` partitions, so a lookback that wrote a
+  partial day would have destroyed the rest of it. Fifteen untouched dates with
+  unchanged counts is that risk measured away on real data rather than argued about.
+
+### M-033 — Warm-up read works across a midnight boundary (real data)
+- **Value:** `2026-09-09` has **113 bars and 113 non-NULL `rolling_vol`** — zero NULLs
+  at the day boundary. Total NULL `rolling_vol` across all 23,592 rows: **exactly 20.**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Notes:** The sharpest single confirmation in the project so far. Without the
+  warm-up day, the first ~20 bars of every newly-written date would have NULL
+  volatility, and 09-09 would read `113 / 93`. Instead the only NULLs in the entire
+  dataset are the original 20 at the very start of history (08-23: 439/419), which is
+  the one place they are genuinely correct.
+  This is a **silent** failure mode: NULL volatility means the Gold layer skips those
+  bars, so a broken warm-up would quietly delete the first 20 minutes of every day
+  from `anomaly_events` with no error anywhere.
+
+### M-034 — Incremental vs full reprocess runtime
+- **Value:** **150 s incremental** vs **205 s full reprocess** on the same dataset —
+  **27% faster today**, and bounded rather than growing
+- **Label:** MEASURED (n=1 each)
+- **Measured on:** 2026-09-09
+- **Parameters:** incremental read ≈ 3 days (~600 Bronze docs); full read = 4,688 docs
+- **Notes:** **My prediction was wrong.** I predicted incremental would drop "toward
+  the ~90 s floor" since it reads a comparable number of documents to the 607-doc run
+  that took 90 s. It took 150 s. Same input size, 67% slower — so the M-029 model
+  (`90 s + 0.028 s/doc`) does not capture everything. Unexplained candidates, none
+  measured: dynamic partition overwrite must enumerate and delete existing files, and
+  Silver now has 17 partitions instead of 3; plus ordinary Glue cold-start variance
+  on n=1. **Do not quote a runtime model until this is re-measured** with several
+  runs of each mode on the same day.
+  The durable claim is not the 27%: it is that incremental runtime is **bounded by
+  the lookback** while full reprocess grows with accumulated history without limit.
+- **FORWARD RISK for slice 5:** at 17 symbols the incremental read becomes ~14,688
+  docs (3 days × 17 symbols), projecting to **~8 minutes against a 15-minute job
+  timeout.** Uncomfortably tight. Mitigations, in preference order: replace the
+  whole-day warm-up with a precise hour-level one (~33% less read); raise the
+  timeout; add workers. Note that **adding workers would now actually help** — at
+  slice 2 it would not have, because the job was startup-bound. The right answer
+  changed because the workload did.
 
 ### M-028 — Feature warm-up NULLs are exactly as designed (and detect gaps)
 - **Value:** of 23,327 bars: **1 NULL `log_return`**, **20 NULL `rolling_vol`**

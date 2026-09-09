@@ -116,8 +116,8 @@ resource "aws_glue_job" "bronze_to_silver" {
   #
   # At 2 DPU x $0.44/DPU-hour that is roughly $42 for one runaway job. A hung job
   # with the default timeout is the single most expensive mistake available in this
-  # project. 15 minutes is generous for a job that should finish in one or two.
-  timeout = 15
+  # project. See variables.tf for why this is now 25 rather than 15.
+  timeout = var.glue_job_timeout_minutes
 
   # No automatic retries. A retry on a genuinely broken job just doubles the bill,
   # and every failure we have seen so far has been deterministic (a bug), not
@@ -141,8 +141,9 @@ resource "aws_glue_job" "bronze_to_silver" {
 
   default_arguments = {
     # Our own arguments, consumed by argparse in bronze_to_silver.py.
-    "--bronze-path" = "s3://${aws_s3_bucket.layer["bronze"].id}/"
-    "--silver-path" = "s3://${aws_s3_bucket.layer["silver"].id}/"
+    "--bronze-path"    = "s3://${aws_s3_bucket.layer["bronze"].id}/"
+    "--silver-path"    = "s3://${aws_s3_bucket.layer["silver"].id}/"
+    "--lookback-hours" = tostring(var.bronze_to_silver_lookback_hours)
 
     # Glue's own arguments.
     "--TempDir"            = "s3://${aws_s3_bucket.layer["artifacts"].id}/glue-temp/"

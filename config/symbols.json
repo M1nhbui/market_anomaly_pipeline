@@ -2,15 +2,12 @@
   "interval": "1m",
   "source_host": "data-api.binance.vision",
 
-  "_note": "Single source of truth for the basket. Terraform reads this file and feeds it to both the ingestion Lambda's environment and the Athena partition-projection enum, so the two can never drift apart. Do not hardcode a symbol list anywhere else.",
+  "_note": "Single source of truth for the basket. Terraform reads this file and feeds it to BOTH the ingestion Lambda's environment AND the Athena partition-projection enum, so the writer and the reader cannot drift apart. Do not hardcode a symbol list anywhere else.",
+
+  "_validation": "Every symbol below passed scripts/validate_basket.py on 2026-09-09: endpoint reachable, newest CLOSED bar under 15 minutes old, and real trading activity across the last 30 bars. Re-run that script before adding anything.",
 
   "active": [
-    "BTCUSDT"
-  ],
-
-  "_active_note": "Slice 1-4 run BTCUSDT-only on purpose: one symbol makes dedup and window-function output small enough to verify by eye. Expanded at slice 5.",
-
-  "pending_validation": [
+    "BTCUSDT",
     "ETHUSDT",
     "BNBUSDT",
     "SOLUSDT",
@@ -24,12 +21,24 @@
     "ATOMUSDT",
     "UNIUSDT",
     "NEARUSDT",
+    "POLUSDT",
     "PEPEUSDT",
     "SHIBUSDT"
   ],
 
-  "_undecided": {
-    "symbols": ["MATICUSDT", "POLUSDT"],
-    "reason": "Both return HTTP 200 from the klines endpoint, but HTTP 200 only proves the symbol is KNOWN to the exchange, not that it is actively trading. Needs a bar-freshness check before either is admitted. Including a symbol that returns stale bars would poison the freshness DQ check and produce a permanently-flatlined series in the anomaly detector."
+  "_composition": {
+    "large_cap_majors": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    "mid_caps": ["LINKUSDT", "DOTUSDT", "LTCUSDT", "ATOMUSDT", "UNIUSDT", "NEARUSDT", "POLUSDT"],
+    "deliberately_volatile": ["PEPEUSDT", "SHIBUSDT"],
+    "rationale": "All USDT-quoted so returns are directly comparable. Spanning market-cap tiers so the cross-section has structure. Two volatile names on purpose so the anomaly layer has something to catch and the DQ gate's empty-bar check has something to see."
+  },
+
+  "rejected": {
+    "MATICUSDT": {
+      "reason": "DELISTED. Returns HTTP 200 but its newest closed bar was 1,049,854 minutes (729 days) old when checked on 2026-09-09 - last traded around September 2024, when Polygon migrated MATIC to POL.",
+      "why_it_matters": "HTTP 200 proves a symbol is KNOWN to the exchange, not that it is TRADING. Admitting it would have written bars dated 2024 into Silver on every run - outside the partition-projection date range, therefore invisible to Athena, and permanently failing the DQ freshness check. Silent orphan data with no error anywhere.",
+      "replaced_by": "POLUSDT",
+      "note": "README section 18 still lists MATICUSDT in the basket and needs correcting."
+    }
   }
 }
