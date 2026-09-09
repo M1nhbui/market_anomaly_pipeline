@@ -38,6 +38,8 @@ def spark():
         # developer happens to be sitting - which is how the timezone bug this line
         # guards against was found in the first place.
         .config("spark.sql.session.timeZone", "UTC")
+        # Must match the production job - see the comment in bronze_to_silver.main().
+        .config("spark.sql.sources.partitionColumnTypeInference.enabled", "false")
         .config("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
         .config("spark.ui.enabled", "false")
         .getOrCreate()
@@ -70,6 +72,52 @@ def make_bar(open_time_ms, close=100.0, volume=1.0, num_trades=10):
         f"{close * volume / 2:.8f}",
         "0",
     ]
+
+
+def simulate_ingestion(root, symbol, first_bar_ms, n_bars, bars_per_doc=15,
+                       close_fn=None, interval_ms=60_000):
+    """
+    Write Bronze in the REAL Hive-style layout the ingestion Lambda produces:
+
+        symbol=<sym>/date=<ingest date>/hour=<ingest hour>/ingest_*.json
+
+    Necessary for any test of incremental processing, because the incremental path
+    resolver globs on `symbol=*/date=<D>` - a flat directory of files would be found
+    by full reprocess (which uses recursiveFileLookup) but not by the globs.
+
+    Note the deliberate realism: files are keyed by INGEST time while the bars
+    inside them are keyed by BAR time, so a bar from 23:59 can land under the next
+    day's hour=00 prefix. That mismatch is precisely why the warm-up read is a whole
+    day rather than a precisely-computed 21 minutes.
+    """
+    from datetime import datetime, timezone
+
+    close_fn = close_fn or (lambda i: 100.0 + (i % 7) - 3.0)
+
+    for start in range(0, n_bars, bars_per_doc):
+        chunk = [
+            make_bar(first_bar_ms + i * interval_ms, close=close_fn(i))
+            for i in range(start, min(start + bars_per_doc, n_bars))
+        ]
+        # Ingested shortly after the last bar in the chunk closed.
+        ingest_ms = chunk[-1][6] + 30_000
+        ingest_dt = datetime.fromtimestamp(ingest_ms / 1000, tz=timezone.utc)
+
+        directory = (
+            root
+            / f"symbol={symbol}"
+            / f"date={ingest_dt:%Y-%m-%d}"
+            / f"hour={ingest_dt:%H}"
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+
+        write_bronze_doc(
+            directory,
+            f"ingest_{ingest_dt:%H%M%S}_{start:05d}.json",
+            symbol,
+            ingest_dt.isoformat().replace("+00:00", "Z"),
+            chunk,
+        )
 
 
 def write_bronze_doc(tmp_path, filename, symbol, ingested_at, bars):

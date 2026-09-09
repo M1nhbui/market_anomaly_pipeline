@@ -26,6 +26,7 @@ code but has behaviour we can actually reason about and test.
 
 import argparse
 import sys
+from datetime import date, datetime, timedelta, timezone
 
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
@@ -453,7 +454,115 @@ SILVER_COLUMNS = [
 ]
 
 
-def run(spark, bronze_path, silver_path):
+# -----------------------------------------------------------------------------
+# Incremental processing
+#
+# THE CONSTRAINT THAT SHAPES ALL OF THIS
+# --------------------------------------
+# Dynamic partition overwrite replaces data at PARTITION granularity, and our
+# partitions are (symbol, date) - whole days. So "process the last 3 hours and write
+# the result" would replace an entire day's partition with three hours of bars,
+# silently destroying the other 21 hours.
+#
+# The rule that follows: if we intend to write a date, we must recompute ALL of it.
+# So the read window is not "the last N hours" - it is "every date that has bars in
+# the last N hours, in full, plus one earlier day for feature warm-up."
+#
+# That is still bounded. At most two target dates (a lookback spanning midnight)
+# plus one warm-up day = three days of Bronze per run, forever, instead of all
+# history. The whole point is turning an O(history) read into an O(1) one.
+#
+# WHY A WHOLE EXTRA DAY OF WARM-UP FOR A 20-MINUTE WINDOW
+# -------------------------------------------------------
+# In principle we need only the ~21 minutes of bars before the first target bar.
+# But Bronze is partitioned by INGEST time while bars are keyed by BAR time (see
+# build_s3_key in the ingestion Lambda), so a bar from 23:59 may sit under the next
+# day's hour=00 prefix, and the 15-bar overlap smears each bar across several
+# ingestion files. Reconstructing exactly which Bronze prefixes hold "the 21 minutes
+# before midnight" is fiddly and easy to get subtly wrong.
+#
+# Reading one extra whole day is a deliberate trade of ~33% more input for a rule
+# that is obviously correct. At a 20-minute window it is very generous; if the
+# volatility window ever grew to hours, this is the knob that would need revisiting.
+# -----------------------------------------------------------------------------
+
+
+def compute_incremental_windows(as_of, lookback_hours):
+    """
+    Given a moment and a lookback, decide which dates to rewrite and which to read.
+
+    Returns (target_dates, read_dates) as lists of 'YYYY-MM-DD' strings.
+    target_dates are rewritten; read_dates = target_dates plus one prior day.
+    """
+    window_start = as_of - timedelta(hours=lookback_hours)
+
+    target_dates = []
+    cursor = window_start.date()
+    while cursor <= as_of.date():
+        target_dates.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+
+    warmup_date = (
+        date.fromisoformat(target_dates[0]) - timedelta(days=1)
+    ).isoformat()
+
+    return target_dates, [warmup_date] + target_dates
+
+
+def bronze_globs_for_dates(bronze_root, dates):
+    """
+    Build one glob per date, spanning all symbols.
+
+    `symbol=*` avoids having to pass the symbol list into this job at all - the
+    basket already lives in config/symbols.json and is read by Terraform. One fewer
+    place for it to drift.
+    """
+    root = bronze_root.rstrip("/")
+    return [f"{root}/symbol=*/date={d}" for d in dates]
+
+
+def existing_paths(spark, patterns):
+    """
+    Filter glob patterns down to those that actually match something.
+
+    Spark raises on an input path that does not exist, and on the first run of a new
+    day the warm-up date may legitimately have no data. Rather than special-casing
+    that, we ask Hadoop's FileSystem directly.
+
+    Reaching through spark._jvm is unusual but this is the standard way to do a path
+    existence check from PySpark, and it works identically against a local
+    filesystem and against S3 - which is what keeps this testable on a laptop.
+    """
+    jvm = spark._jvm
+    hadoop_conf = spark._jsc.hadoopConfiguration()
+
+    found = []
+    for pattern in patterns:
+        hadoop_path = jvm.org.apache.hadoop.fs.Path(pattern)
+        filesystem = hadoop_path.getFileSystem(hadoop_conf)
+        matches = filesystem.globStatus(hadoop_path)
+        if matches is not None and len(matches) > 0:
+            found.append(pattern)
+
+    return found
+
+
+EMPTY_STATS = {
+    "mode": "incremental",
+    "raw_bar_records": 0,
+    "unfinished_dropped": 0,
+    "finished_records": 0,
+    "unique_bars_written": 0,
+    "duplicates_removed": 0,
+    "duplicate_rate_pct": 0.0,
+    "null_log_return": 0,
+    "null_rolling_vol": 0,
+    "vol_window_bars": VOL_WINDOW_BARS,
+    "note": "no matching Bronze paths for the lookback window",
+}
+
+
+def run(spark, bronze_path, silver_path, lookback_hours=0, as_of=None):
     """
     Execute the job and return the row counts collected along the way.
 
@@ -463,8 +572,26 @@ def run(spark, bronze_path, silver_path):
     only way to ever state a measured duplicate rate. On a large job you would cache
     the intermediate DataFrame first, or sample, or emit the counts as Spark
     accumulators during the single pass you were doing anyway.
+
+    lookback_hours = 0 means FULL REPROCESS: read all of Bronze, rewrite all of
+    Silver. Correct, simple, and O(history) - which is why it is the default for
+    tests and the reference implementation, and why it is not what production runs.
     """
-    bronze = read_bronze(spark, bronze_path)
+    target_dates = None
+
+    if lookback_hours and lookback_hours > 0:
+        as_of = as_of or datetime.now(timezone.utc)
+        target_dates, read_dates = compute_incremental_windows(as_of, lookback_hours)
+        paths = existing_paths(spark, bronze_globs_for_dates(bronze_path, read_dates))
+
+        if not paths:
+            stats = dict(EMPTY_STATS)
+            stats["target_dates"] = target_dates
+            return stats
+
+        bronze = read_bronze(spark, paths)
+    else:
+        bronze = read_bronze(spark, bronze_path)
 
     exploded = cast_bars(explode_bars(bronze))
     exploded.cache()  # counted twice below; cache avoids re-reading S3
@@ -475,6 +602,19 @@ def run(spark, bronze_path, silver_path):
     finished_records = finished.count()
 
     silver = finalize(finished).select(*SILVER_COLUMNS)
+
+    # Drop the warm-up day AFTER computing features but BEFORE writing.
+    #
+    # The warm-up bars were read solely so that the first bars of the target dates
+    # have a full 20-minute history behind them. They must not be written: they
+    # belong to a date we are not rewriting, and emitting them would make dynamic
+    # partition overwrite replace that day's partition with just its tail.
+    #
+    # This single filter is the difference between incremental processing and
+    # incremental data loss.
+    if target_dates is not None:
+        silver = silver.filter(F.col("date").isin(target_dates))
+
     silver.cache()
     unique_bars = silver.count()
 
@@ -491,6 +631,8 @@ def run(spark, bronze_path, silver_path):
     ).collect()[0]
 
     stats = {
+        "mode": "incremental" if target_dates is not None else "full",
+        "target_dates": target_dates,
         "raw_bar_records": raw_bar_records,
         "unfinished_dropped": raw_bar_records - finished_records,
         "finished_records": finished_records,
@@ -577,6 +719,24 @@ def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--bronze-path", required=True)
     parser.add_argument("--silver-path", required=True)
+    parser.add_argument(
+        "--lookback-hours",
+        type=int,
+        default=0,
+        help=(
+            "0 = full reprocess of all Bronze (simple, correct, O(history)). "
+            "N > 0 = rewrite only dates touched by the last N hours, reading one "
+            "extra prior day for feature warm-up."
+        ),
+    )
+    parser.add_argument(
+        "--as-of",
+        default=None,
+        help=(
+            "ISO-8601 UTC instant to treat as 'now'. Exists so tests can pin the "
+            "window deterministically; production leaves it unset."
+        ),
+    )
     # Glue injects --JOB_NAME and friends; ignore anything we did not declare.
     known, _unknown = parser.parse_known_args(argv)
     return known
@@ -608,6 +768,19 @@ def main(argv=None):
         # accidentally true.
         .config("spark.sql.session.timeZone", "UTC")
         # ---------------------------------------------------------------------
+        # Keep partition columns as STRINGS on read-back.
+        #
+        # By default Spark inspects Hive-style directory names and infers types, so
+        # reading `date=2026-09-02` back gives a DateType column - even though the
+        # job wrote `date` as a string, and even though the Glue Catalog declares it
+        # as string. Athena sees a string, Spark sees a date, and the two quietly
+        # disagree about the same column.
+        #
+        # That would surface at slice 6, where silver_to_gold reads Silver with
+        # Spark and re-partitions its output by the same column. Pinning inference
+        # off makes Spark and the Catalog agree.
+        .config("spark.sql.sources.partitionColumnTypeInference.enabled", "false")
+        # ---------------------------------------------------------------------
         # Parquet timestamps: Spark's default is INT96 for legacy Hive/Impala
         # compatibility, which Athena reads but which is a deprecated format.
         # TIMESTAMP_MICROS is the modern, portable choice.
@@ -615,7 +788,19 @@ def main(argv=None):
         .getOrCreate()
     )
 
-    stats = run(spark, args.bronze_path, args.silver_path)
+    as_of = None
+    if args.as_of:
+        as_of = datetime.fromisoformat(args.as_of.replace("Z", "+00:00"))
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+
+    stats = run(
+        spark,
+        args.bronze_path,
+        args.silver_path,
+        lookback_hours=args.lookback_hours,
+        as_of=as_of,
+    )
 
     # Printed as one line of JSON so it is greppable in CloudWatch logs.
     import json
