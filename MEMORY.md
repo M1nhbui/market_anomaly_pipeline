@@ -823,3 +823,143 @@ and leave a two-month hole in Silver between 2026-09-09 and now. Full reprocess 
 cover it but reads every Bronze object ever written — by the (already unreliable)
 runtime model, far beyond the 25-minute timeout. Silver needs a deliberate backfill
 before anything downstream is trustworthy.
+
+---
+
+## Resumption (2026-11-08 / 09)
+
+### Bug #14 — the AWS CLI would not run at all
+
+```
+zsh: bad CPU type in executable: aws
+```
+
+Not an AWS problem: macOS refusing to execute a binary built for another processor.
+`uname -m` was `arm64` (Apple Silicon), and `aws` lived at `/usr/local/bin` — the
+Intel-era install location — while Terraform was already native `darwin_arm64`. The
+Intel `aws` had presumably been running under translation, which was no longer
+available after an OS upgrade during the gap. Fixed by AWS's official installer
+(`aws-cli/2.39.6 ... exe/arm64`); credentials in `~/.aws/` survived untouched.
+
+Decision: **do not upgrade Terraform** (1.15.8 → 1.17.1 was offered). It satisfies
+`>= 1.6`, and changing it right before touching state again adds risk for no gain.
+
+### Health check
+
+- **Tests:** 60 passed — the local Spark toolchain survived the gap.
+- **Ingestion:** still running every 5 minutes, ~10.96 s, 95 MB (M-050) — no drift.
+- **Bronze:** **303,678 objects, 831 MB** (M-049), within about one run's worth of
+  what the schedule arithmetic predicts for two months of 17-symbol ingestion.
+- **Cost Explorer:** output not yet received.
+
+A cost prediction was logged before seeing the bill (M-051): S3 should be dominated
+by **PUT requests (~$0.73/month)**, not storage (~$0.02/month).
+
+### Bug #15 — a backfill hazard the incremental design never had to face
+
+Planning the backfill exposed an interaction between two earlier decisions: Bronze is
+partitioned by **ingest** date (slice 1), and incremental runs rewrite whole **bar**
+dates (slice 4.5). Day D's last minutes are fetched after midnight, so they sit under
+Bronze `date=D+1`.
+
+In production `as_of` is "now", so the newest target date has no D+1 yet and nothing
+is lost. But a backfill sets `as_of` in the past. Targeting only D would read
+`[D-1, D]`, miss D's tail, and dynamic overwrite would write a permanently short day
+— silently.
+
+Proven with a test before relying on it:
+`test_backfill_targeting_only_day_d_loses_its_final_minutes` confirms the loss, and
+`test_backfill_with_as_of_just_after_midnight_writes_day_d_completely` confirms the
+fix: `as_of = (D + step) 00:30`, so the reads always include the day after. Each step
+writes its last day short and the next step rewrites it, so steps must run in order.
+62 tests passing.
+
+**Built:** `scripts/backfill_silver.sh`, which runs those steps sequentially, stops on
+the first failure (a skipped step would leave a hole), and logs every run's
+`ExecutionTime` to `backfill_log.csv` — sixty-odd runs over a constant input size, the
+runtime distribution the n=1 measurements never provided.
+
+Step size is a parameter because it is a real trade-off: one day per run reads 3 days
+to finish 1 (3× read amplification); three days per run reads 5 to finish 3 (1.67×).
+Bigger steps amortise startup and warm-up — the two-cadence lesson again — but each
+run gets closer to the timeout. Plan: calibrate with a single one-day step first.
+
+### The bill, finally (M-052)
+
+Cost Explorer: **$1.96 total since August.** The prediction logged *before* looking
+(M-051) held: October's S3 write requests were **151,815 against 151,776 predicted**
+for a 31-day month (+0.03%). Requests cost 69× what storage did. Ingestion's real
+running cost is ~$0.79/month, essentially all S3 PUTs — the price of one small file
+per symbol every five minutes.
+
+A small `APS1` storage charge briefly looked like a stray resource. It is
+ap-southeast-1, where three unrelated buckets in the same account live. Lesson:
+Cost Explorer reports the *account*, not the project — the `Project` default tag from
+slice 0 is the precise filter.
+
+### The calibration step (M-053)
+
+**A prediction corrected before the run.** I had told the operator to expect 24,480
+bars on 09-09 (17 × 1,440). Checking each symbol's first bar showed 16 symbols only
+began at 04:23–04:24 that day. Re-derived from the data: **20,259 bars, 19,939 with
+`rolling_vol`.** Measured after the run: **20,259 and 19,939, exact.** Every symbol
+ends at 23:59, so the late-ingested tail problem (bug #15) is fixed on real data, not
+only in tests. 323 s, ~$0.08.
+
+**An explanation corrected after the run.** I had said the tail day (09-10) would be
+written with "only its first few minutes." It held 24,446 of 24,480 — short by exactly
+17 × 2 minutes. The job reads whole Bronze *ingest-days*; `as_of` chooses which dates
+to rewrite, it does not truncate the data. The plan was unaffected (the next step
+rewrites that day), but the stated mechanism was wrong.
+
+### Bug #16 — Glue's concurrency slot outlives the run
+
+The full backfill (`2026-09-10 → 2026-11-08`, 3 days per step) stopped after its first
+step. Step 1 SUCCEEDED in 576 s (predicted ~700 s); step 2 was rejected immediately:
+
+```
+ConcurrentRunsExceededException: Concurrent runs exceeded.
+```
+
+Nothing else was running. `get-job-run` reports SUCCEEDED a few seconds before Glue
+releases the job's single slot (`max_concurrent_runs = 1`, chosen in slice 2b), and the
+script started the next run inside that window. The calibration run never hit it
+because it was a single step.
+
+The stop-on-first-failure rule did its job: step 2 never started, so nothing was
+half-written. Fix: retry `start-job-run` on that one error (30 s, up to 6 times);
+any other error still aborts. Resumed from `2026-09-13` — step 1 had written Sep 10–12
+completely and left Sep 13 short, which is exactly where the next step begins.
+
+### The backfill, completed (M-054, M-055)
+
+With the retry in place, the remaining 19 steps ran unattended, 07:06–10:25 UTC. All 20
+three-day steps SUCCEEDED. Every back-to-back start (18 of 18) needed exactly one 30 s
+wait for the slot — bug #16 is systematic, not occasional.
+
+**The runtime question got a partial answer.** Eighteen runs over the same input size
+(the first and last steps read less): p50 575 s, stdev 22 s (3.9%). So at a fixed input,
+run-to-run spread is small. That does **not** explain September's 90 s vs 150 s on
+similar input — those runs also ran different code (slice 4 features, slice 4.5
+incremental path), and that gap remains unexplained. The slice-4 model over-predicted
+by ~18% (~700 s vs 575 s). Cost ≈ $2.81, derived from list price.
+
+**Asked, before checking: "can I assume no gaps now?" Answered: no — verify.** The
+backfill guarantees that what is in Bronze reaches Silver; it cannot create bars that
+were never fetched. Three or more consecutive missed runs, deadline-deferred symbols,
+Binance-side maintenance, or crashed invocations could all leave real holes.
+
+Checked four ways, all clean:
+
+- every day Sep 10 → Nov 8 at exactly **24,480 bars**, all with `rolling_vol`
+- the `LAG(open_time)` gap query over all **1,522,959** bars: **0 rows**
+- NULL `rolling_vol` = **340 = 17 × 20**, NULL `log_return` = **17** — exact, and the
+  time-based windows mean any gap would have added more
+- Lambda: **0 errors, 288 invocations on every one of 60 days**
+
+Zero missing minutes over 79 days, 61 of them at 17 symbols, with nobody watching.
+That is the strongest reliability number the project has.
+
+Silver now ends at 2026-11-09 10:12 (the last step read Nov 5–9 and rewrote Nov 6–9,
+including today's Bronze; I had said Nov 6–9 / Nov 7–9 — off by a day), so it is
+already stale by the gate's 15-minute rule — the fail-then-pass demonstration is set up.

@@ -996,6 +996,133 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
 
 ---
 
+### M-049 — Unattended ingestion over a two-month gap
+- **Value:** **303,678 Bronze objects / 831,439,491 bytes** on 2026-11-09, after ~61
+  days running unattended at 17 symbols. 298,990 objects added since M-031.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09
+- **How:** `aws s3 ls s3://crypto-anomaly-bronze-.../ --recursive --summarize`
+- **Notes:** Expected from schedule arithmetic (17,583 five-minute runs × 17 symbols,
+  plus the BTC-only tail and one manual invoke) ≈ 299,000 — the actual count lands
+  within roughly one run's worth of that. **Consistent with essentially every
+  scheduled run writing all 17 symbols for two months, but my baseline is only
+  accurate to about ±1 run, so this is not yet a reliability figure.** The CloudWatch
+  `Errors` and `Invocations` metrics over the same period are the precise version.
+  Per-object size in the 17-symbol era: **2,735 bytes** (vs 2,932 for BTC alone —
+  smaller price strings for the other pairs).
+
+### M-050 — Ingestion Lambda after two months
+- **Value:** **10,960 ms** mean (n=6), **95 MB** max memory, 2026-11-09 05:23–05:48 UTC
+- **Label:** MEASURED
+- **Notes:** Within 2% of the 10,746 ms measured at expansion (M-038), memory flat.
+  No drift over two months of continuous operation.
+
+### M-051 — Projected ingestion cost: S3 PUT requests, not storage
+- **Value:** ~146,880 PUTs/month ⇒ **~$0.73/month**; storage of 831 MB ⇒ **~$0.02/month**
+- **Label:** ESTIMATED — to be checked against Cost Explorer
+- **How:** `17 symbols × 288 runs/day × 30 days` PUTs × $0.005 per 1,000 (S3 Standard
+  list price, assumed); bytes × $0.023/GB-month
+- **Notes:** The prediction is that S3's line item is dominated by **request count**,
+  not bytes — tiny objects every 5 minutes are cheap to store and comparatively
+  expensive to write. Over the 61-day gap that is ~$1.49 of PUTs. If Cost Explorer
+  shows S3 near $1.50 for Sep–Nov, this is confirmed; if it shows cents, the pricing
+  assumption is wrong. Lambda should show ~$0 (≈23,700 GB-s/month, inside the
+  always-free allowance).
+
+### M-052 — Actual cost to date; M-051 prediction CONFIRMED
+- **Value:** **$1.96 total** project spend, 2026-08-01 → 2026-11-09. By month: Aug
+  $0.099, Sep $0.872, Oct $0.787, Nov (8 days) $0.201. October (first full month of
+  unattended 17-symbol ingestion): **S3 $0.783, of which Tier-1 requests $0.759
+  (151,815 requests) and storage $0.011**; Lambda $0.0039; Glue $0 (not scheduled).
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09
+- **How:** `aws ce get-cost-and-usage --time-period Start=2026-08-01,End=2026-11-09
+  --granularity MONTHLY --metrics UnblendedCost --group-by Type=DIMENSION,Key=SERVICE`,
+  then the same filtered to S3 and grouped by `USAGE_TYPE`.
+- **Notes:** M-051 predicted 146,880 PUTs for a 30-day month; October has 31 days, so
+  the prediction becomes 17 × 288 × 31 = **151,776 — measured 151,815 (+0.03%)**, the
+  residual being Glue/Athena writes. Requests are **69× storage** cost, as predicted.
+  Ingestion's steady-state cost is therefore **~$0.79/month**, essentially all S3 PUTs.
+  Lifetime Glue spend is $0.345 — every manual run of both jobs since slice 2.
+  **Caveat — these are account totals, not project totals.** ~$0.012/month of
+  `APS1-TimedStorage` is ap-southeast-1, where three unrelated buckets live
+  (`my-soccer-bigdata-*`, `news-sentiment-*`, `aws-logs-*`). The project is ~$0.012/month
+  less than the S3 line shows; immaterial, but a tag-based cost query (`Project` default
+  tag, slice 0) is the exact version.
+
+### M-053 — Backfill calibration step: correctness predicted exactly, 323 s
+- **Value:** one step (`as_of=2026-09-10T00:30Z`, lookback 1h) **SUCCEEDED in 323 s**.
+  Silver `2026-09-09`: **20,259 bars / 19,939 with `rolling_vol`** — predicted
+  20,259 / 19,939 before the run. Every symbol's last bar 23:59.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09
+- **How:** `./scripts/backfill_silver.sh 2026-09-09 2026-09-09` (run id in
+  `backfill_log.csv`); before/after Athena `GROUP BY ROLLUP(symbol)` on `date='2026-09-09'`.
+- **Notes:**
+  - **Before:** 11,045 bars (frozen at 14:57 when Silver was last built). **After:**
+    20,259. Prediction derived from each symbol's first bar: BTC 1,440 (full day);
+    BNB/ETH/SOL first bar 04:23 ⇒ 1,177; the other 13 first bar 04:24 ⇒ 1,176. NULL
+    `rolling_vol` = 16 new symbols × 20 warm-up minutes = 320, unchanged.
+  - **An earlier prediction of mine was wrong first:** I had told the operator to
+    expect 24,480 (17 × 1,440). The 16 new symbols only began ingesting at ~04:23 on
+    09-09. Corrected before the run, from the data.
+  - `2026-09-08` untouched (1,440, BTC only) — the warm-up day was read and not written.
+  - `2026-09-10` written **24,446 of 24,480 — short by exactly 34 = 17 × 2 minutes**
+    (23:58, 23:59, ingested on 09-11). I had said the tail day would hold "only its
+    first few minutes"; wrong — the job reads whole Bronze *ingest-days*, and `as_of`
+    selects dates, it does not truncate them. The next step rewrites it either way.
+  - Input ≈ 9,250 Bronze docs (09-08 BTC only, 09-09 partly 17 symbols, 09-10 full).
+    323 s fits the slice-4 model (~90 s + ~0.025 s/doc) better than anything since —
+    n=1, not yet quotable. Cost ≈ 2 DPU × 323 s × $0.44/DPU-h ≈ **$0.08**.
+
+### M-054 — Backfill runtime distribution (n=20, constant input size)
+- **Value:** 20 × 3-day steps, all SUCCEEDED. **p50 574 s, mean 575.5 s, min 517,
+  max 627, stdev 25.3 s (CV 4.4%).** Total 11,510 s of Glue ⇒ 2 DPU × 3.20 h × $0.44 ≈
+  **$2.81** (DERIVED from list price; confirm in Cost Explorer after the ~24 h lag).
+- **Label:** MEASURED (timings); DERIVED (cost)
+- **Measured on:** 2026-11-09, 07:06–10:25 UTC
+- **How:** `./scripts/backfill_silver.sh 2026-09-10 2026-11-08 3` (resumed from
+  2026-09-13 after bug #16); timings from `backfill_log.csv`.
+- **Notes:**
+  - **Input size is constant for 18 of the 20.** Each reads 5 Bronze ingest-days at 17
+    symbols (≈ 24,480 documents). Two are smaller: the first (warm-up day 09-09, only
+    partly 17-symbol; 576 s) and the last (read 11-05 → 11-09, where 11-09 held ~10 h;
+    517 s — the minimum). **Over the 18 full-size steps: p50 575 s, mean 578.7 s, min
+    548, max 627, stdev 22.4 s (CV 3.9%).**
+  - At fixed input, run-to-run spread is ±3.9%. **September's 90 s vs 150 s on similar
+    input remains unexplained** — those runs also used different code (features
+    arrived in slice 4, the incremental path in 4.5), so this sample does not explain
+    them.
+  - Predicted ~700 s per step from the slice-4 model (~90 s + 0.025 s/doc); measured
+    ~575 s — **over-predicts by ~18%** at this size.
+  - 18 of 18 back-to-back starts needed exactly one 30 s retry for the concurrency
+    slot (bug #16), plus the original failure; the first step after resuming did
+    not. Wall-clock per step ≈ 10.5 min.
+
+### M-055 — Zero gaps across 79 days and 17 symbols (Silver after backfill)
+- **Value:** **1,522,959 bars; 0 missing minutes for any symbol over its entire
+  history** (BTCUSDT from 2026-08-23 16:41, the other 16 from 2026-09-09 04:23/04:24,
+  through 2026-11-09 10:12). **Every day 2026-09-10 → 2026-11-08 has exactly 24,480
+  bars (17 × 1,440) with 24,480 non-NULL `rolling_vol`.**
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09 ~10:30 UTC
+- **How:** Athena — (1) per-day `COUNT(*)` / `COUNT(rolling_vol)` with
+  `HAVING COUNT(*) <> 24480 OR COUNT(rolling_vol) <> COUNT(*)` → only 09-09 (partial
+  first day, 20,259 as M-053) and 11-09 (today, 10,421 = 17 × 613 min to 10:12);
+  (2) `LAG(open_time)` gap query → **0 rows**; (3) totals: NULL `rolling_vol` = **340
+  = 17 symbols × 20 warm-up minutes**, NULL `log_return` = **17 = 1 per symbol** —
+  both exact, and both would grow with any gap since the windows are time-based.
+- **Supporting:** CloudWatch `AWS/Lambda Errors` for `crypto-anomaly-ingestion`,
+  2026-09-09 → 2026-11-09: **0**. `Invocations`: **288 on every one of 60 days**
+  (17,280 total) — not one missed scheduled run.
+- **Notes:** Extends the zero-gap result from 16 days at 1 symbol (M-022/M-026) to
+  **79 days, and 61 days at 17 symbols, unattended.** Three independent methods agree
+  (row counts, gap query, warm-up NULL arithmetic) plus the ingestion side's own
+  metrics. Quotable: "ingested 1.52M one-minute bars across 17 pairs with zero missing
+  minutes over two months of unattended operation."
+
+---
+
 ## Open measurement-design questions
 
 Resolved as we reach each stage. Recorded here so the reasoning is visible later.

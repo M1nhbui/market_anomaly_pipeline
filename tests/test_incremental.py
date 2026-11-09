@@ -191,6 +191,64 @@ def test_first_bars_of_a_target_date_have_warmed_up_volatility(
         assert row.rolling_vol is not None, "needs 20 minutes of previous-day history"
 
 
+# -----------------------------------------------------------------------------
+# BACKFILL SEMANTICS (added 2026-11-09, before backfilling a two-month gap)
+#
+# Bronze is partitioned by INGEST date. The last minutes of day D are fetched after
+# midnight, so they live under Bronze date=D+1. In production `as_of` is "now", so
+# the newest target date has no D+1 yet and nothing is lost. But a BACKFILL sets
+# `as_of` in the past, where D+1 Bronze exists - and if D+1 is not a read date, D's
+# final minutes are silently dropped and dynamic overwrite writes a short day.
+# -----------------------------------------------------------------------------
+
+
+def test_backfill_targeting_only_day_d_loses_its_final_minutes(spark, bronze_root, tmp_path):
+    """
+    Documents the hazard. as_of = midday on 09-02 with a 1h lookback targets only
+    09-02 and reads [09-01, 09-02] - but 09-02's last bars were ingested on 09-03.
+    If this test ever FAILS, the hazard has been fixed and the backfill procedure
+    below can be simplified.
+    """
+    full_out, inc_out = tmp_path / "full", tmp_path / "inc"
+    b2s.run(spark, str(bronze_root), str(full_out), lookback_hours=0)
+    stats = b2s.run(
+        spark, str(bronze_root), str(inc_out),
+        lookback_hours=1, as_of=utc("2026-09-02T12:00:00"),
+    )
+    assert stats["target_dates"] == ["2026-09-02"]
+
+    full_day = spark.read.parquet(str(full_out)).filter(F.col("date") == "2026-09-02")
+    inc_day = spark.read.parquet(str(inc_out)).filter(F.col("date") == "2026-09-02")
+
+    assert inc_day.count() < full_day.count(), "the tail of 09-02 lives under Bronze 09-03"
+    last_full = full_day.agg(F.max("open_time")).collect()[0][0]
+    last_inc = inc_day.agg(F.max("open_time")).collect()[0][0]
+    assert last_inc < last_full
+
+
+def test_backfill_with_as_of_just_after_midnight_writes_day_d_completely(
+    spark, bronze_root, tmp_path
+):
+    """
+    The safe backfill step: as_of = D+1 00:30 with a 1h lookback targets [D, D+1]
+    and reads [D-1, D, D+1], so D's late-ingested tail is included. Day D must match
+    full reprocess exactly. (D+1 may itself be short - the NEXT step rewrites it.)
+    """
+    full_out, inc_out = tmp_path / "full", tmp_path / "inc"
+    b2s.run(spark, str(bronze_root), str(full_out), lookback_hours=0)
+    stats = b2s.run(
+        spark, str(bronze_root), str(inc_out),
+        lookback_hours=1, as_of=utc("2026-09-03T00:30:00"),
+    )
+    assert stats["target_dates"] == ["2026-09-02", "2026-09-03"]
+
+    full_day = spark.read.parquet(str(full_out)).filter(F.col("date") == "2026-09-02")
+    inc_day = spark.read.parquet(str(inc_out)).filter(F.col("date") == "2026-09-02")
+
+    assert full_day.exceptAll(inc_day).count() == 0
+    assert inc_day.exceptAll(full_day).count() == 0
+
+
 def test_incremental_reads_less_than_full_reprocess(spark, bronze_root, tmp_path):
     """
     The whole economic point. Incremental must actually read fewer records - if it
