@@ -1,0 +1,95 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunAthenaQueries",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:StopQueryExecution",
+        "athena:GetWorkGroup"
+      ],
+      "Resource": "arn:aws:athena:${region}:${account_id}:workgroup/${workgroup}"
+    },
+    {
+      "Sid": "ReadCatalogMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetPartition",
+        "glue:GetPartitions"
+      ],
+      "Resource": [
+        "arn:aws:glue:${region}:${account_id}:catalog",
+        "arn:aws:glue:${region}:${account_id}:database/${silver_database}",
+        "arn:aws:glue:${region}:${account_id}:table/${silver_database}/*"
+      ]
+    },
+    {
+      "Sid": "ReadSilverData",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "${silver_bucket_arn}/*"
+    },
+    {
+      "Sid": "ListSilverForQueryPlanning",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "${silver_bucket_arn}"
+    },
+    {
+      "Sid": "AthenaResultsReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "${athena_results_bucket_arn}/*"
+    },
+    {
+      "Sid": "AthenaResultsList",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "${athena_results_bucket_arn}"
+    },
+    {
+      "Sid": "PersistDqResults",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "${gold_bucket_arn}/dq_results/*"
+    },
+    {
+      "Sid": "CreateOwnLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup"
+      ],
+      "Resource": "arn:aws:logs:${region}:${account_id}:*"
+    },
+    {
+      "Sid": "WriteOwnLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/${function_name}:*"
+    }
+  ]
+}

@@ -128,6 +128,102 @@ resource "aws_glue_catalog_table" "anomaly_events" {
   }
 }
 
+# -----------------------------------------------------------------------------
+# DQ run history, as a queryable table.
+#
+# The gate writes one JSON line PER CHECK rather than one nested object per run.
+# Flat means "what is the pass rate per check over the last N runs" is a single
+# GROUP BY instead of an UNNEST or a scripting exercise - and the whole reason the
+# results are persisted at all is that a boolean return value makes that question
+# unanswerable a day later.
+#
+# JSON rather than Parquet because the writer is a Lambda emitting a handful of rows
+# per run. Converting to Parquet would mean a Glue job to process kilobytes.
+# -----------------------------------------------------------------------------
+
+resource "aws_glue_catalog_table" "dq_results" {
+  name          = "dq_results"
+  database_name = aws_glue_catalog_database.gold.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    EXTERNAL       = "TRUE"
+    classification = "json"
+
+    "projection.enabled"            = "true"
+    "projection.date.type"          = "date"
+    "projection.date.range"         = "${var.projection_start_date},NOW"
+    "projection.date.format"        = "yyyy-MM-dd"
+    "projection.date.interval"      = "1"
+    "projection.date.interval.unit" = "DAYS"
+
+    "storage.location.template" = "s3://${aws_s3_bucket.layer["gold"].id}/dq_results/date=$${date}"
+  }
+
+  storage_descriptor {
+    location = "s3://${aws_s3_bucket.layer["gold"].id}/dq_results/"
+
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
+      parameters = {
+        # Tolerate a field appearing in the JSON that is not in this schema, rather
+        # than failing the whole query. A quality gate whose own history table breaks
+        # when a check is added would be an unfortunate irony.
+        "ignore.malformed.json" = "true"
+        "dots.in.keys"          = "false"
+      }
+    }
+
+    columns {
+      name    = "run_id"
+      type    = "string"
+      comment = "Lambda request id - correlates a row back to CloudWatch logs."
+    }
+    columns {
+      name    = "run_at"
+      type    = "string"
+      comment = "ISO-8601 UTC. Kept as string: the JSON SerDe's timestamp handling is fussy, and parsing on read with from_iso8601_timestamp() is explicit and reliable."
+    }
+    columns {
+      name    = "check_name"
+      type    = "string"
+      comment = "Named check_name, not check - CHECK is a reserved word in Athena."
+    }
+    columns {
+      name    = "severity"
+      type    = "string"
+      comment = "fail (blocks the pipeline) | warn (recorded and alerted, does not block)."
+    }
+    columns {
+      name    = "passed"
+      type    = "boolean"
+    }
+    columns {
+      name    = "observed"
+      type    = "double"
+      comment = "The measured value. NULL when not measurable - e.g. freshness on an empty Silver layer, where the raw value is infinite and infinity is not valid JSON."
+    }
+    columns {
+      name    = "threshold"
+      type    = "double"
+    }
+    columns {
+      name    = "detail"
+      type    = "string"
+      comment = "Human-readable explanation of what the check protects against."
+    }
+  }
+
+  partition_keys {
+    name    = "date"
+    type    = "string"
+    comment = "Run date (UTC). Reserved word in Athena SQL - quote it."
+  }
+}
+
 resource "aws_glue_catalog_database" "silver" {
   name        = "${local.db_prefix}_silver"
   description = "Cleaned, typed, deduplicated market bars."

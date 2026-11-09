@@ -31,6 +31,43 @@ variable "budget_limit_usd" {
   default     = 10
 }
 
+# -----------------------------------------------------------------------------
+# DQ gate thresholds.
+#
+# Every default below traces to a measurement in METRICS.md rather than a guess.
+# Kept as Terraform variables so tuning one is a reviewable diff, not a code change.
+# -----------------------------------------------------------------------------
+
+variable "dq_window_hours" {
+  description = "How much recent Silver the gate evaluates. 24h rather than the 3h transform lookback: ratio checks need a sample large enough to be stable. Over 3 hours SHIBUSDT sees ~180 bars, so one quiet stretch swings its empty-bar ratio by several points and the gate becomes a coin flip."
+  type        = number
+  default     = 24
+}
+
+variable "dq_min_row_ratio" {
+  description = "Fraction of theoretically-possible bars that must be present (symbols x 60 x window_hours). 0.70 tolerates a symbol being briefly unavailable or a couple of missed ingestion cycles without blocking."
+  type        = number
+  default     = 0.70
+}
+
+variable "dq_max_empty_bar_pct" {
+  description = "Untraded-minute tolerance, WARN severity. Measured worst case is SHIBUSDT at 1.89% (M-039) over 10.6 hours, which did NOT include a full overnight cycle when liquidity is thinnest. 5% leaves headroom while still catching a feed returning empty bars wholesale."
+  type        = number
+  default     = 5.0
+}
+
+variable "dq_max_gap_pct" {
+  description = "Sequence-gap tolerance, WARN severity. Measured: ZERO gaps across 23,327 bars over 16 days (M-022, M-028). Not calibrated to observed noise - there is none - but to avoid blocking on a single missed ingestion cycle that the 15-bar overlap would normally backfill."
+  type        = number
+  default     = 0.5
+}
+
+variable "dq_max_freshness_minutes" {
+  description = "Newest-bar age tolerance, FAIL severity. Measured structural lag is 4m23s (M-025): the 5-minute ingestion interval plus the deliberate exclusion of the in-progress candle. README §11 specifies 'within one interval of now', which at 1-minute bars would fail on EVERY run. 15 minutes covers the structural lag plus two missed cycles."
+  type        = number
+  default     = 15
+}
+
 variable "zscore_window_bars" {
   description = <<-EOT
     Trailing window, in bars, for the Gold anomaly z-score baseline.

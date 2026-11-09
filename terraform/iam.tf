@@ -62,7 +62,72 @@ resource "aws_iam_role_policy" "ingestion_lambda" {
 }
 
 # -----------------------------------------------------------------------------
-# Notes on what is deliberately NOT granted to this role
+# DQ gate Lambda role
+#
+# README §13: "The DQ Gate role is most often under-scoped: Athena needs catalog read
+# and results-bucket write, not just 'read Silver'."
+#
+# That is worth spelling out, because the mental model people arrive with is wrong.
+# Athena is not a service that reads your data on its own behalf - it runs the query
+# USING THE CALLER'S CREDENTIALS. So this role needs, in full:
+#
+#   1. athena:*QueryExecution      - obvious, and the only part most people grant
+#   2. athena:GetWorkGroup         - required because our workgroup sets
+#                                    enforce_workgroup_configuration = true; without
+#                                    it every query fails before it starts
+#   3. glue:Get{Database,Table,Partitions} - Athena reads the table definition from
+#                                    the Catalog, as us
+#   4. s3:GetObject on SILVER      - Athena reads the Parquet, as us
+#   5. s3:PutObject on ATHENA-RESULTS - Athena writes the result set to S3 before
+#                                    handing it back, as us. Forgetting this produces
+#                                    a query that fails at the very end, after the
+#                                    scan has already been billed.
+#
+# Items 2 and 5 are the ones that get missed. Both fail late and unhelpfully.
+# -----------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "dq_gate_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "dq_gate" {
+  name               = "${var.project_name}-dq-gate"
+  description        = "DQ gate Lambda: query Silver via Athena, write results to Gold."
+  assume_role_policy = data.aws_iam_policy_document.dq_gate_trust.json
+}
+
+resource "aws_iam_role_policy" "dq_gate" {
+  name = "${var.project_name}-dq-gate-policy"
+  role = aws_iam_role.dq_gate.id
+
+  policy = templatefile("${path.module}/../iam_policies/dq_gate_lambda.json", {
+    workgroup                 = aws_athena_workgroup.main.name
+    silver_database           = aws_glue_catalog_database.silver.name
+    silver_bucket_arn         = aws_s3_bucket.layer["silver"].arn
+    athena_results_bucket_arn = aws_s3_bucket.layer["athena-results"].arn
+    gold_bucket_arn           = aws_s3_bucket.layer["gold"].arn
+    region                    = var.aws_region
+    account_id                = data.aws_caller_identity.current.account_id
+    function_name             = local.dq_gate_function_name
+  })
+}
+
+# Deliberately NOT granted to the DQ gate:
+#   s3:PutObject on Silver  - it inspects, it never writes data
+#   s3:*      on Bronze     - it has no business there at all
+#   s3:PutObject on Gold outside dq_results/ - it must not be able to touch
+#                             anomaly_events, which is the Glue job's output
+
+# -----------------------------------------------------------------------------
+# Notes on what is deliberately NOT granted to the ingestion role
 # -----------------------------------------------------------------------------
 #
 # s3:GetObject     - ingestion never reads. If it did, that would be a bug.

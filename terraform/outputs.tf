@@ -41,3 +41,11 @@ output "silver_to_gold_job_name" {
 output "anomaly_events_table" {
   value = "${aws_glue_catalog_database.gold.name}.${aws_glue_catalog_table.anomaly_events.name}"
 }
+
+output "dq_gate_function_name" {
+  value = aws_lambda_function.dq_gate.function_name
+}
+
+output "dq_results_table" {
+  value = "${aws_glue_catalog_database.gold.name}.${aws_glue_catalog_table.dq_results.name}"
+}

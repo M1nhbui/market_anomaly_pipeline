@@ -485,6 +485,142 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   Kept rather than deleted because "the metric was wrong before the data was" is
   worth remembering — the error was in the baseline, not the pipeline.
 
+### M-041 — Anomaly firing rate (the headline signal-volume number)
+- **Value:** **1.3273%** of scored observations breach |z| > 3 — **916 events** from
+  34,507 scorable bars × 2 rules. Split: **524 return_zscore, 392 volume_zscore.**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Parameters:** k = 3.0, 60-bar trailing window excluding the current bar,
+  `MIN_ROLLING_STD` = 1e-6, volume scored as log1p, 17 symbols
+- **How:** `SILVER_TO_GOLD_STATS` log line, cross-checked in Athena
+- **Raw output:**
+  ```
+  {"total_bars": 34524, "scorable_bars": 34507, "total_events": 916,
+   "events_by_rule": {"return_zscore": 524, "volume_zscore": 392},
+   "firing_rate_pct": 1.3273, "zscore_window_bars": 60, "zscore_threshold": 3.0}
+  ```
+- **Notes:** Predicted 0.5–3% before running; landed inside. **4.9× the ~0.27% a
+  normal distribution implies**, which is the fat-tail effect M-030 anticipated,
+  now measured on the actual detector rather than inferred from a max-move statistic.
+  **README §2 describes a "short, ranked list." 916 events in 17 days is not short**
+  — that phrasing needs correcting (slice 9) to reflect the measured rate.
+  **Do not quote the aggregate rate without the composition caveat below (M-043).**
+
+### M-042 — Firing rate is not uniform across symbols
+- **Value:** **BTCUSDT 1.468%** vs **1.099%** across the other 16 symbols combined.
+  BTCUSDT produced **77.9% of all events** while holding **70.6% of all bars.**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Notes:** The aggregate 1.33% is dominated by BTCUSDT purely because it has 17
+  days of history and the other 16 have ~1.5 days. **Per-symbol rates are the honest
+  view; the aggregate is a weighted average of very unequal samples.** Re-measure once
+  all symbols have comparable history before drawing any conclusion about which
+  assets are more anomaly-prone — right now the difference is more plausibly a
+  different observation window than a different market character.
+  Tail comparison: `return_zscore` mean|z| 4.07 / max 33.4; `volume_zscore` mean|z|
+  3.84 / max 9.3. The much shorter volume tail is direct evidence the log1p transform
+  is doing its job — on raw volume that tail would be far heavier and one-sided.
+
+### M-043 — Signal composition: a measured data-quality artifact in the output
+- **Value:** 3 of the top 15 events by |z| are **SHIBUSDT `volume_zscore` with
+  `num_trades = 0`** and NEGATIVE z-scores (−9.34, −8.46, −7.89)
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Notes:** These are **untraded minutes being flagged as "anomalously low volume."**
+  Volume was 0, so log1p(0) = 0 against a positive baseline mean, producing a large
+  negative z. Nothing is broken — the arithmetic is correct — but the *event* is an
+  absence of activity, not a market event worth a human's attention.
+  This is README §4's "conflates genuine market events with data-quality glitches"
+  **measured in our own output rather than disclaimed in prose.** It is the single
+  best piece of evidence that the honesty boundary is a finding, not a hedge.
+  Open design question: whether the volume rule should be **one-sided** (spikes only,
+  `z > k`), which README §10's wording — "to catch volume spikes" — arguably implies,
+  and which would remove all three artifacts.
+
+### M-046 — Cross-engine validation of the z-score implementation
+- **Value:** an independent SQL reimplementation in Athena/Trino reproduced the Spark
+  job's volume-rule count **exactly: 392 = 392**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **How:** `queries/volume_tail_composition.sql` recomputes log1p volume z-scores from
+  Silver using Trino window functions (`RANGE BETWEEN 3600 PRECEDING AND 60
+  PRECEDING`, ≥60 observations, stddev > 1e-6) — matching the PySpark window exactly
+  but sharing no code
+- **Raw output:**
+  ```
+  upper_tail  lower_tail  lower_untraded  two_sided_total
+  334         58          13              392
+  ```
+- **Notes:** Two implementations, two engines, no shared code, identical answer. This
+  is a stronger correctness claim than the Spark job reporting its own counts — the
+  same reason M-023 was more convincing than M-017.
+  **Triple accounting check:** original run 524 + 392 = 916; SQL says 334 + 58 = 392;
+  new one-sided run 524 + 334 = 858; and the hour-of-day histogram totals **858**
+  independently. Four numbers, three derivations, all consistent.
+
+### M-047 — What the one-sided volume change actually removed
+- **Value:** removed **58 events (14.8% of 392 volume events)**, of which only
+  **13 were untraded minutes**. The other **45 had real trading, just unusually
+  little.**
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09
+- **Notes:** **This corrects my own framing.** I justified the one-sided change
+  primarily on the SHIBUSDT untraded-minute artifact, which implied the lower tail was
+  mostly junk. It wasn't: the pure artifact is **1.42% of all 916 events**, and 45 of
+  the 58 removed events were legitimate low-volume observations.
+  What justifies the change is not volume of junk but **where** the junk sat: the
+  untraded-minute events were **20% of the top 15 by |z|** — concentrated at the
+  extreme tail, which is precisely the part of a ranked list anyone actually reads.
+  A 1.4% contaminant that occupies a fifth of the top of the list matters far more
+  than its share suggests.
+  The honest statement of the tradeoff: the rule now misses genuine low-volume
+  events, including a real trading halt, in exchange for a clean upper tail.
+
+### M-048 — Hour-of-day structure in anomaly events
+- **Value:** significant non-uniformity. Against 35.8 events/hour expected
+  (Poisson sd 5.98): **hour 07 UTC = 70 (z=+5.73)**, **hour 13 UTC = 66 (z=+5.06)**,
+  **hour 09 = 54 (z=+3.05)**, **hour 17 = 12 (z=−3.97)**.
+- **Label:** MEASURED
+- **Measured on:** 2026-09-09 (858 events, 17 days, one-sided volume rule)
+- **How:** `GROUP BY hour(event_time)` in Athena; Poisson z against a uniform null
+- **Notes:** All four survive a Bonferroni correction for 48 tests (24 hours × 2
+  statistics, threshold |z| > 2.87). Candidate explanation for hour 13: the US equity
+  open at 13:30 UTC falls inside it. Hour 07 has no explanation I am confident in and
+  **should not be given one** without evidence.
+  **Major caveat: 78% of these events are BTCUSDT** (M-042), and the other 16 symbols
+  have only ~1.5 days of history. This is close to a BTC hour-of-day profile, not a
+  market-wide one. Re-measure once all symbols have comparable coverage.
+
+### M-044 — Candidate scheduled-volatility clustering (HYPOTHESIS NOT SUPPORTED)
+- **Value:** two events at **exactly 12:30:00 UTC** on different days, including the
+  largest event in the dataset (2026-09-04, z = −33.39) and 2026-08-26 (z = −8.39)
+- **Label:** **HYPOTHESIS TESTED AND NOT SUPPORTED** — retained as a record of a
+  rejected idea
+- **Tested on:** 2026-09-09 via the hour-of-day histogram (M-048)
+- **Result:** Hour 12 is **not** a count outlier — 44 events against 35.8 expected
+  (z = +1.38). It *is* a magnitude outlier at first glance: mean|z| 4.91 against 3.94
+  across hours (z = +3.17).
+  **But that finding is driven almost entirely by one event.** The single
+  2026-09-04 12:30 event (|z| = 33.39) contributes **15.5% of hour 12's total |z|**.
+  Removing it drops hour 12's mean|z| to 4.25, or **z = +1.00 — no longer
+  significant, and comfortably below the Bonferroni threshold of 2.87.**
+- **Verdict:** the original observation was **pattern-matching on n=2**. There is no
+  evidence of elevated anomaly frequency at 12:30 UTC in this dataset; a single very
+  large event happened to land there, and I built a story around it.
+  Recorded rather than deleted because "I formed a hypothesis, tested it properly,
+  and it failed" is worth as much as a confirmed one — and because a one-event-driven
+  mean is a mistake that is easy to make and easy to miss.
+  The genuine hour-of-day structure that *does* survive testing is in M-048, and it
+  is at hours 07, 09, 13 and 17 — not 12.
+
+### M-045 — Silver→Gold job runtime
+- **Value:** **98 s** for 34,524 input rows → 916 output rows
+- **Label:** MEASURED (n=1)
+- **Measured on:** 2026-09-09
+- **Notes:** Near the ~90 s startup floor, consistent with reading ~2 MB of Parquet
+  being essentially free. Supports the decision to read all of Silver rather than
+  build incremental logic for this job. n=1 and Glue timing is nondeterministic.
+
 ### M-037 — Warm-up invariant holds identically across all 17 symbols
 - **Value:** **every one of 17 symbols has exactly 20 NULL `rolling_vol`** — the 16
   newly added symbols and BTCUSDT alike, despite BTCUSDT having 24,377 bars and the
