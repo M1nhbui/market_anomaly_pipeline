@@ -1,0 +1,552 @@
+<title>Crypto Anomaly Pipeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a single left-aligned engineering logbook column; each medallion layer carries its own metal tone as an identity mark. */
+:root {
+  --bg: #f5f6f7; --panel: #ffffff; --fg: #15191e; --muted: #59626d; --faint: #8a939d; --line: #dde1e6; --grid: #e9ecef;
+  --accent: #2a78d6; --s1: #2a78d6; --s2: #eb6834;
+  --bronze: #9c6230; --silver: #66727f; --gold: #9a740c;
+  --bronze-bg: #f6ece3; --silver-bg: #eceff2; --gold-bg: #f6f0dc;
+  --good: #0a7d0a; --warn: #a86b00; --plan: #8a939d;
+  --band: rgba(42,120,214,.12);
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111418; --panel: #181c21; --fg: #e7eaee; --muted: #a2abb5; --faint: #77808a; --line: #2b3138; --grid: #222830;
+  --accent: #3987e5; --s1: #3987e5; --s2: #d95926;
+  --bronze: #d29a66; --silver: #aab5c1; --gold: #d8b04a;
+  --bronze-bg: #2a2018; --silver-bg: #20252b; --gold-bg: #29240f;
+  --good: #3fbf3f; --warn: #e0a22a; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #181c21; --fg: #e7eaee; --muted: #a2abb5; --faint: #77808a; --line: #2b3138; --grid: #222830;
+  --accent: #3987e5; --s1: #3987e5; --s2: #d95926;
+  --bronze: #d29a66; --silver: #aab5c1; --gold: #d8b04a;
+  --bronze-bg: #2a2018; --silver-bg: #20252b; --gold-bg: #29240f;
+  --good: #3fbf3f; --warn: #e0a22a; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: -.005em; }
+h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.1; }
+h2 { font-size: 26px; line-height: 1.2; }
+h3 { font-size: 18px; line-height: 1.3; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+section { display: grid; gap: 18px; min-width: 0; }
+.lede { font-size: 17px; color: var(--muted); }
+.head { display: grid; gap: 14px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 22px; font: 13px/1.4 var(--mono); color: var(--muted); }
+.meta b { color: var(--fg); font-weight: 500; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; min-width: 0; }
+.scroll { overflow-x: auto; }
+.note { font-size: 13px; color: var(--muted); }
+
+/* status chips */
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--mono); letter-spacing: .04em;
+  text-transform: uppercase; padding: 4px 7px; border-radius: 3px; border: 1px solid currentColor; }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.chip.deployed { color: var(--good); } .chip.written { color: var(--warn); } .chip.planned { color: var(--plan); }
+.legend-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* architecture */
+#arch { width: 100%; min-width: 860px; height: auto; display: block; }
+#arch .node rect { stroke-width: 1.5; }
+#arch text { fill: var(--fg); font-family: var(--body); }
+#arch .lbl { font: 600 14px var(--display); }
+#arch .sub { font: 11.5px var(--mono); fill: var(--muted); }
+#arch .edge { stroke: var(--faint); stroke-width: 1.5; fill: none; }
+#arch .edge.plan { stroke-dasharray: 4 4; }
+#arch .edge-lbl { font: 11px var(--mono); fill: var(--muted); }
+
+/* layers */
+.layers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.layer { border-radius: 6px; padding: 18px; display: grid; gap: 12px; align-content: start; border: 1px solid var(--line); border-top: 4px solid var(--tone); background: var(--panel); }
+.layer.bronze { --tone: var(--bronze); } .layer.silver { --tone: var(--silver); } .layer.gold { --tone: var(--gold); }
+.layer h3 { color: var(--tone); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13.5px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.big { font: 600 30px/1 var(--display); font-variant-numeric: tabular-nums; }
+
+/* journey */
+.journey { display: grid; gap: 14px; }
+.stage { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 18px; }
+.stage-tag { font: 600 15px var(--display); color: var(--tone); padding-top: 18px; border-top: 4px solid var(--tone); }
+.stage.bronze { --tone: var(--bronze); } .stage.silver { --tone: var(--silver); } .stage.gold { --tone: var(--gold); }
+.files { display: grid; gap: 10px; }
+.file { border: 1px solid var(--line); border-radius: 4px; padding: 12px; display: grid; gap: 8px; background: var(--bronze-bg); min-width: 0; }
+.file-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font: 12px var(--mono); color: var(--muted); }
+.file-head b { color: var(--fg); font-weight: 500; }
+pre.raw { margin: 0; font: 12.5px/1.55 var(--mono); white-space: pre; overflow-x: auto; color: var(--fg); }
+.raw .hit { background: var(--band); outline: 1px solid var(--accent); border-radius: 2px; }
+.raw .dim { color: var(--faint); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 11.5px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+td.v, th.v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
+td.src { color: var(--muted); font-size: 12.5px; }
+.formula { font: 14px/1.9 var(--mono); background: var(--gold-bg); border-radius: 4px; padding: 14px 16px; overflow-x: auto; white-space: nowrap; }
+.formula .z { font-weight: 600; color: var(--fg); }
+
+/* charts */
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+.chart text { fill: var(--muted); font: 11px var(--mono); }
+.chart .axis { stroke: var(--line); }
+.chart .grid { stroke: var(--grid); }
+.chart .s1 { fill: var(--s1); } .chart .s2 { fill: var(--s2); }
+.chart .line { fill: none; stroke: var(--s1); stroke-width: 2; }
+.chart .band { fill: var(--band); }
+.chart .hl { fill: var(--s2); }
+.chart .ann { fill: var(--fg); font: 500 11.5px var(--mono); }
+.chart .hit { fill: transparent; }
+.chart .hit:hover + .mark, .chart g.hov:hover .mark { opacity: .75; }
+.chart-wrap { position: relative; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font: 12px var(--mono); color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+#tip { position: fixed; pointer-events: none; z-index: 20; background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 7px 10px; font: 12px/1.45 var(--mono); box-shadow: 0 4px 14px rgba(0,0,0,.12); max-width: 260px; }
+
+.stale { border-left: 3px solid var(--warn); padding: 10px 14px; background: var(--panel); font-size: 14px; }
+.stale b { color: var(--warn); }
+
+/* results */
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.res { background: var(--panel); padding: 16px; display: grid; gap: 6px; align-content: start; }
+.res .mid { font: 500 11px var(--mono); color: var(--faint); }
+.res .val { font: 600 28px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.res .lab { font-weight: 500; font-size: 14px; }
+.res .det { font-size: 12.5px; color: var(--muted); }
+
+footer { font-size: 13px; color: var(--muted); display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 18px; }
+code { font: 12.5px var(--mono); background: var(--panel); border: 1px solid var(--line); padding: 1px 5px; border-radius: 3px; }
+
+@media (max-width: 760px) {
+  .layers, .two { grid-template-columns: 1fr; }
+  .stage { grid-template-columns: 1fr; gap: 8px; }
+  .stage-tag { padding-top: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap" id="app">
+  <header class="head">
+    <div class="eyebrow">Portfolio data-engineering project · AWS · Terraform</div>
+    <h1>Crypto Anomaly Pipeline</h1>
+    <p class="lede">Every five minutes a Lambda downloads one-minute price bars for 17 crypto pairs from Binance. Spark on Glue cleans them, then flags minutes where a pair moved or traded far outside its own recent normal. The output is a filter for a person to review, not a trading signal.</p>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Architecture</div>
+    <h2>Where the data goes</h2>
+    <div class="legend-row"><span class="chip deployed">Deployed</span><span class="chip written">Written, not deployed</span><span class="chip planned">Planned</span></div>
+    <div class="panel scroll"><svg id="arch" viewBox="0 0 1000 400" role="img" aria-label="Pipeline architecture diagram"></svg></div>
+    <p class="note">Ingestion runs every 5 minutes because it is cheap. Transforms are meant to run hourly because every Glue run pays ~90 s of startup regardless of input size; running them every 5 minutes would cost 12× more (M-020). Until Step Functions is built they are run by hand.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Medallion layers</div>
+    <h2>Three copies of the same market, each more refined</h2>
+    <div class="layers" id="layers"></div>
+    <p class="note" id="storage-note"></p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Follow one minute</div>
+    <h2 id="j-title"></h2>
+    <p id="j-lede"></p>
+    <div class="journey" id="journey"></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Silver · completeness</div>
+    <h2>Bars per day</h2>
+    <p id="daily-lede"></p>
+    <div class="panel"><div class="chart-wrap" id="c-daily"></div></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Gold · anomaly events</div>
+    <h2>What the detector flags</h2>
+    <div class="stale" id="stale" hidden></div>
+    <div class="legend"><span><i style="background:var(--s1)"></i>return_zscore (two-sided)</span><span><i style="background:var(--s2)"></i>volume_zscore (spikes only)</span></div>
+    <div class="two">
+      <div class="panel"><h3>Events per day</h3><div class="chart-wrap" id="c-gday"></div></div>
+      <div class="panel"><h3>Events by hour of day (UTC)</h3><div class="chart-wrap" id="c-ghour"></div></div>
+      <div class="panel"><h3>Events by pair</h3><div class="chart-wrap" id="c-gsym"></div></div>
+      <div class="panel"><h3>How extreme: |z| distribution</h3><div class="chart-wrap" id="c-gz"></div><p class="note">Under a normal distribution, |z| above 4 would be rare (about 1 in 16,000 minutes). Here it is common. Market returns have fat tails.</p></div>
+    </div>
+    <div class="panel scroll"><h3>Largest events</h3><table id="top"></table></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Bronze · raw landing zone</div>
+    <h2>Raw files accumulating</h2>
+    <p id="growth-lede"></p>
+    <div class="panel"><div class="chart-wrap" id="c-growth"></div></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Measured, not estimated</div>
+    <h2>Results</h2>
+    <p class="muted">Each figure is a measurement logged with the command that produced it. The ID points to its entry in <span class="mono">METRICS.md</span>.</p>
+    <div class="results" id="results"></div>
+  </section>
+
+  <footer>
+    <div id="gen"></div>
+    <div>Rebuild: <code>python3 scripts/build_tour.py</code>, then republish <span class="mono">tour/</span>. Data comes from Athena queries over Silver and Gold, the raw Bronze objects, and CloudWatch S3 metrics.</div>
+  </footer>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const $ = (s) => document.querySelector(s);
+const fmt = (n, d = 0) => n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const bytes = (b) => b >= 1e9 ? fmt(b / 1e9, 2) + " GB" : b >= 1e6 ? fmt(b / 1e6, 1) + " MB" : fmt(b / 1e3, 1) + " KB";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function txt(parent, x, y, s, attrs = {}) { const t = el("text", { x, y, ...attrs }, parent); t.textContent = s; return t; }
+
+/* tooltip */
+const tip = $("#tip");
+function bindTip(node, html) {
+  const show = (e) => { tip.innerHTML = html; tip.hidden = false; move(e); };
+  const move = (e) => {
+    const p = e.touches ? e.touches[0] : e;
+    const r = tip.getBoundingClientRect();
+    let x = p.clientX + 14, y = p.clientY + 14;
+    if (x + r.width > innerWidth - 8) x = p.clientX - r.width - 14;
+    if (y + r.height > innerHeight - 8) y = p.clientY - r.height - 14;
+    tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+  };
+  node.addEventListener("mouseenter", show); node.addEventListener("mousemove", move);
+  node.addEventListener("mouseleave", () => (tip.hidden = true));
+  node.addEventListener("touchstart", show, { passive: true });
+}
+
+/* generic bar chart: rows = [{x, parts:[{v, cls, name}], label}] */
+function barChart(host, rows, { w = 520, h = 220, yMax, yTicks = 4, xLabel = (r) => r.x, xEvery = 1, hl, fmtY = (v) => fmt(v), tipFn } = {}) {
+  const m = { t: 12, r: 8, b: 26, l: 48 };
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, class: "chart", role: "img" });
+  const iw = w - m.l - m.r, ih = h - m.t - m.b;
+  const max = yMax || Math.max(...rows.map((r) => r.parts.reduce((a, p) => a + p.v, 0))) || 1;
+  const nice = niceMax(max, yTicks);
+  const y = (v) => m.t + ih - (v / nice) * ih;
+  for (let i = 0; i <= yTicks; i++) {
+    const v = (nice / yTicks) * i;
+    el("line", { x1: m.l, x2: w - m.r, y1: y(v), y2: y(v), class: i ? "grid" : "axis" }, svg);
+    txt(svg, m.l - 6, y(v) + 4, fmtY(v), { "text-anchor": "end" });
+  }
+  const bw = iw / rows.length, gap = Math.min(2, bw * 0.2), barW = Math.max(1, bw - gap);
+  rows.forEach((r, i) => {
+    const x = m.l + i * bw + gap / 2;
+    const g = el("g", { class: "hov" }, svg);
+    let acc = 0;
+    r.parts.forEach((p, j) => {
+      if (!p.v) return;
+      const y0 = y(acc), y1 = y(acc + p.v);
+      const top = j === r.parts.length - 1 || r.parts.slice(j + 1).every((q) => !q.v);
+      const hgt = Math.max(0.5, y0 - y1 - (acc ? 1 : 0));
+      el("rect", { x, y: y1, width: barW, height: hgt, rx: top && barW > 6 ? 2 : 0, class: "mark " + p.cls }, g);
+      acc += p.v;
+    });
+    if (hl && hl(r)) el("rect", { x: x - 1, y: m.t, width: barW + 2, height: ih, fill: "none", stroke: "var(--s2)", "stroke-dasharray": "3 3" }, g);
+    const hit = el("rect", { x: m.l + i * bw, y: m.t, width: bw, height: ih, class: "hit" }, g);
+    if (tipFn) bindTip(hit, tipFn(r));
+    if (i % xEvery === 0) txt(svg, x + barW / 2, h - 8, xLabel(r), { "text-anchor": "middle" });
+  });
+  host.appendChild(svg);
+  return { svg, y, m, bw, w, h };
+}
+function niceMax(v, ticks) {
+  const raw = v / ticks, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((s) => s * mag).find((s) => s >= raw);
+  return step * ticks;
+}
+
+/* ---------------- render ---------------- */
+fetch("data.json").then((r) => r.json()).then(render).catch((e) => {
+  $("#app").insertAdjacentHTML("afterbegin", `<p class="stale"><b>Could not load data.json.</b> ${esc(e.message)}</p>`);
+});
+
+function last(series) { return series && series.length ? series[series.length - 1] : null; }
+
+function render(D) {
+  const st = D.silver_totals, gt = D.gold_totals, F = D.featured;
+  const day = (s) => s.slice(0, 10);
+
+  $("#meta").innerHTML = [
+    ["Pairs", D.symbols.length],
+    ["Silver", `${day(st.first_bar)} → ${st.last_bar.slice(0, 16)} UTC`],
+    ["Bars", fmt(st.bars)],
+    ["Gold events", fmt(gt.events)],
+    ["Data as of", D.generated_at.replace("T", " ").slice(0, 16) + " UTC"],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+
+  /* architecture */
+  drawArch(D);
+
+  /* layers */
+  const sb = D.storage, lb = last(sb.bronze.objects), lbb = last(sb.bronze.bytes), ls = last(sb.silver.objects), lsb = last(sb.silver.bytes), lg = last(sb.gold.objects), lgb = last(sb.gold.bytes);
+  const layers = [
+    ["bronze", "Bronze", "Raw JSON, exactly as Binance sent it", fmt(lb?.value), "objects", [
+      ["Size", bytes(lbb?.value)], ["Format", "JSON, 15 bars per file"], ["Partitioned by", "symbol / ingest date / hour"],
+      ["Changes", "never; delete denied by IAM"], ["Written by", "Lambda, every 5 min"]]],
+    ["silver", "Silver", "Cleaned, typed, deduplicated, with features", fmt(st.bars), "bars", [
+      ["Size", bytes(lsb?.value)], ["Files", fmt(ls?.value)], ["Format", "Parquet + Snappy"], ["Partitioned by", "symbol / bar date"],
+      ["Added columns", "log_return, rolling_vol, …"], ["Written by", "Glue bronze_to_silver"]]],
+    ["gold", "Gold", "Anomaly events and data-quality history", fmt(gt.events), "events", [
+      ["Size", bytes(lgb?.value)], ["Rule", `|z| > ${gt.k} over ${gt.window_bars} min`], ["Format", "Parquet"],
+      ["Partitioned by", "event date"], ["Written by", "Glue silver_to_gold"]]],
+  ];
+  $("#layers").innerHTML = layers.map(([c, name, desc, big, unit, kv]) => `
+    <div class="layer ${c}"><h3>${name}</h3><p class="note">${desc}</p>
+      <div><span class="big">${big}</span> <span class="muted">${unit}</span></div>
+      <dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>`).join("");
+  $("#storage-note").textContent = `Object counts and sizes come from CloudWatch's daily S3 metrics (latest ${lb?.date}), which trail by about a day. Silver bars and Gold events come from Athena at build time.`;
+
+  /* journey */
+  journey(F);
+
+  /* daily completeness */
+  const daily = D.silver_daily;
+  const full = daily.filter((d) => d.bars === 17 * 1440).length;
+  $("#daily-lede").textContent = `${daily.length} days. A complete day at 17 pairs is 24,480 bars (17 × 1,440 minutes). ${full} days are exactly complete. The first stretch is BTCUSDT alone, the first and last days are partial, and 2026-09-09 is the day the other 16 pairs were added at 04:23 UTC. A gap query over all ${fmt(st.bars)} bars finds no missing minutes (M-055).`;
+  barChart($("#c-daily"), daily.map((d) => ({ x: d.date, parts: [{ v: d.bars, cls: "s1" }], d })), {
+    w: 1000, h: 240, yMax: 24480, xEvery: 7, xLabel: (r) => r.x.slice(5),
+    tipFn: (r) => `<b>${r.x}</b><br>${fmt(r.d.bars)} bars · ${r.d.symbols} pair${r.d.symbols > 1 ? "s" : ""}<br>${r.d.bars === 24480 ? "complete" : r.d.bars === 1440 ? "complete (1 pair)" : "partial day"}`,
+  });
+
+  /* gold */
+  const goldEnd = gt.last_event.slice(0, 10), silverEnd = st.last_bar.slice(0, 10);
+  if (goldEnd < silverEnd) {
+    const s = $("#stale"); s.hidden = false;
+    s.innerHTML = `<b>Gold has not been rebuilt yet.</b> These events cover ${gt.first_event.slice(0, 10)} → ${goldEnd}. Silver now runs to ${silverEnd}, so about two months of data have not been scored. The charts update on the next rebuild.`;
+  }
+  const rules = ["return_zscore", "volume_zscore"], cls = { return_zscore: "s1", volume_zscore: "s2" };
+  const group = (rows, key) => { const m = new Map(); rows.forEach((r) => { if (!m.has(r[key])) m.set(r[key], {}); m.get(r[key])[r.rule] = r.n; }); return m; };
+  const tipParts = (title, o) => `<b>${title}</b><br>${rules.map((r) => `${r.replace("_zscore", "")}: ${o[r] || 0}`).join("<br>")}`;
+  const byDay = group(D.gold_by_rule_day, "date");
+  barChart($("#c-gday"), [...byDay].map(([k, o]) => ({ x: k, parts: rules.map((r) => ({ v: o[r] || 0, cls: cls[r] })), o })), {
+    xEvery: 4, xLabel: (r) => r.x.slice(5), tipFn: (r) => tipParts(r.x, r.o) });
+  const byHour = group(D.gold_by_hour, "hour");
+  barChart($("#c-ghour"), Array.from({ length: 24 }, (_, h) => ({ x: h, o: byHour.get(h) || {} })).map((r) => ({ ...r, parts: rules.map((q) => ({ v: r.o[q] || 0, cls: cls[q] })) })), {
+    xEvery: 3, xLabel: (r) => String(r.x).padStart(2, "0"), tipFn: (r) => tipParts(`${String(r.x).padStart(2, "0")}:00 UTC`, r.o) });
+  const bySym = [...group(D.gold_by_symbol, "symbol")].map(([k, o]) => ({ x: k, o, tot: (o.return_zscore || 0) + (o.volume_zscore || 0) })).sort((a, b) => b.tot - a.tot);
+  hbar($("#c-gsym"), bySym, rules, cls, tipParts);
+  const zh = group(D.gold_zhist, "bin");
+  barChart($("#c-gz"), [...zh].sort((a, b) => a[0] - b[0]).map(([b, o]) => ({ x: b, o, parts: rules.map((r) => ({ v: o[r] || 0, cls: cls[r] })) })), {
+    xLabel: (r) => (r.x >= 12 ? "12+" : r.x), tipFn: (r) => tipParts(`|z| ${r.x >= 12 ? "≥ 12" : r.x + "–" + (r.x + 1)}`, r.o) });
+
+  $("#top").innerHTML = `<thead><tr><th>Pair</th><th>Minute (UTC)</th><th>Rule</th><th class="v">z</th><th class="v">Close</th><th class="v">Trades</th></tr></thead><tbody>` +
+    D.gold_top.map((e) => `<tr><td class="mono">${e.symbol}</td><td class="mono">${e.event_time.slice(0, 16)}</td><td class="mono">${e.rule}</td><td class="v">${fmt(e.zscore, 2)}</td><td class="v">${fmt(e.close_price, e.close_price < 1 ? 6 : 2)}</td><td class="v">${fmt(e.num_trades)}</td></tr>`).join("") + "</tbody>";
+
+  /* bronze growth */
+  const gro = sb.bronze.objects;
+  $("#growth-lede").textContent = `Bronze is never modified, so it only grows: one file per pair every 5 minutes, about ${fmt(17 * 288)} files a day at 17 pairs. Ingestion kept running unattended through a two-month pause in development. Its S3 write requests, not storage, are nearly the whole running cost, about $0.79/month (M-052).`;
+  lineChart($("#c-growth"), gro.map((p) => ({ x: p.date, y: p.value })));
+
+  /* results */
+  $("#results").innerHTML = D.measured.map((m) => `<div class="res"><span class="mid">${m.id}</span><span class="val">${esc(m.value)}</span><span class="lab">${esc(m.label)}</span><span class="det">${esc(m.detail)}</span></div>`).join("");
+
+  $("#gen").textContent = `Snapshot built ${D.generated_at.replace("T", " ")} by scripts/build_tour.py.`;
+}
+
+function hbar(host, rows, rules, cls, tipParts) {
+  const w = 520, rowH = 18, m = { t: 4, r: 34, b: 4, l: 82 }, h = m.t + m.b + rows.length * rowH;
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, class: "chart", role: "img" });
+  const max = Math.max(...rows.map((r) => r.tot)) || 1, iw = w - m.l - m.r;
+  rows.forEach((r, i) => {
+    const y = m.t + i * rowH, g = el("g", { class: "hov" }, svg);
+    txt(svg, m.l - 8, y + 12.5, r.x.replace("USDT", ""), { "text-anchor": "end" });
+    let acc = 0;
+    rules.forEach((q) => {
+      const v = r.o[q] || 0; if (!v) return;
+      el("rect", { x: m.l + (acc / max) * iw + (acc ? 1 : 0), y: y + 3, width: Math.max(1, (v / max) * iw - (acc ? 1 : 0)), height: rowH - 6, rx: 2, class: "mark " + cls[q] }, g);
+      acc += v;
+    });
+    txt(svg, m.l + (acc / max) * iw + 6, y + 12.5, r.tot);
+    bindTip(el("rect", { x: 0, y, width: w, height: rowH, class: "hit" }, g), tipParts(r.x, r.o));
+  });
+  host.appendChild(svg);
+}
+
+function lineChart(host, pts) {
+  const w = 1000, h = 220, m = { t: 12, r: 12, b: 26, l: 58 };
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, class: "chart", role: "img" });
+  const iw = w - m.l - m.r, ih = h - m.t - m.b, maxV = niceMax(Math.max(...pts.map((p) => p.y)), 4);
+  const x = (i) => m.l + (i / Math.max(1, pts.length - 1)) * iw, y = (v) => m.t + ih - (v / maxV) * ih;
+  for (let i = 0; i <= 4; i++) { const v = (maxV / 4) * i; el("line", { x1: m.l, x2: w - m.r, y1: y(v), y2: y(v), class: i ? "grid" : "axis" }, svg); txt(svg, m.l - 6, y(v) + 4, v >= 1000 ? fmt(v / 1000) + "k" : fmt(v), { "text-anchor": "end" }); }
+  el("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.y)}`).join(""), class: "line" }, svg);
+  pts.forEach((p, i) => { if (i % 14 === 0) txt(svg, x(i), h - 8, p.x.slice(5), { "text-anchor": "middle" }); });
+  const lp = pts[pts.length - 1];
+  el("circle", { cx: x(pts.length - 1), cy: y(lp.y), r: 4, fill: "var(--s1)", stroke: "var(--panel)", "stroke-width": 2 }, svg);
+  txt(svg, x(pts.length - 1) - 8, y(lp.y) - 10, fmt(lp.y) + " files", { "text-anchor": "end", class: "ann" });
+  const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--faint)", "stroke-dasharray": "3 3" }, svg); cross.style.display = "none";
+  const dot = el("circle", { r: 4, fill: "var(--s1)" }, svg); dot.style.display = "none";
+  const ov = el("rect", { x: m.l, y: m.t, width: iw, height: ih, class: "hit" }, svg);
+  const showAt = (e) => {
+    const r = svg.getBoundingClientRect(), p = e.touches ? e.touches[0] : e;
+    const sx = ((p.clientX - r.left) / r.width) * w, i = Math.round(((sx - m.l) / iw) * (pts.length - 1));
+    const q = pts[Math.max(0, Math.min(pts.length - 1, i))], qi = pts.indexOf(q);
+    cross.setAttribute("x1", x(qi)); cross.setAttribute("x2", x(qi)); cross.style.display = "";
+    dot.setAttribute("cx", x(qi)); dot.setAttribute("cy", y(q.y)); dot.style.display = "";
+    tip.innerHTML = `<b>${q.x}</b><br>${fmt(q.y)} Bronze files`; tip.hidden = false;
+    tip.style.left = Math.min(innerWidth - 180, p.clientX + 14) + "px"; tip.style.top = p.clientY + 14 + "px";
+  };
+  ov.addEventListener("mousemove", showAt); ov.addEventListener("touchmove", showAt, { passive: true });
+  ov.addEventListener("mouseleave", () => { tip.hidden = true; cross.style.display = dot.style.display = "none"; });
+  host.appendChild(svg);
+}
+
+function drawArch(D) {
+  const svg = $("#arch"), S = D.status;
+  const tone = { deployed: "var(--good)", written: "var(--warn)", planned: "var(--plan)" };
+  const N = {
+    binance:   [20, 40, 150, 62, "Binance API", "data-api.binance.vision", null],
+    scheduler: [20, 150, 150, 62, "EventBridge", "Scheduler · every 5 min", "scheduler"],
+    ingestion: [230, 95, 160, 62, "Lambda", "ingestion · 17 pairs", "ingestion"],
+    bronze:    [450, 95, 150, 62, "S3 Bronze", "raw JSON", "bronze", "--bronze"],
+    b2s:       [660, 95, 170, 62, "Glue job", "bronze_to_silver (Spark)", "bronze_to_silver"],
+    silver:    [660, 230, 170, 62, "S3 Silver", "Parquet · features", "silver", "--silver"],
+    dq:        [450, 230, 150, 62, "Lambda DQ gate", "8 checks via Athena", "dq_gate"],
+    s2g:       [230, 230, 160, 62, "Glue job", "silver_to_gold (Spark)", "silver_to_gold"],
+    gold:      [20, 230, 150, 62, "S3 Gold", "anomaly_events", "gold", "--gold"],
+    athena:    [450, 328, 150, 52, "Athena", "SQL · Glue Catalog", "athena"],
+    sns:       [870, 230, 110, 62, "SNS", "alert email", "sns"],
+  };
+  const edges = [
+    ["binance", "ingestion", "HTTPS", 0], ["scheduler", "ingestion", "invoke", 0], ["ingestion", "bronze", "PutObject", 0],
+    ["bronze", "b2s", "read 3 days", 0], ["b2s", "silver", "overwrite day partitions", 0], ["silver", "dq", "query", 1],
+    ["dq", "s2g", "pass → run", 1], ["s2g", "gold", "write", 0], ["dq", "sns", "fail → alert", 1],
+  ];
+  const ctr = (n) => [n[0] + n[2] / 2, n[1] + n[3] / 2];
+  const defs = el("defs", {}, svg);
+  const mk = el("marker", { id: "arr", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--faint)" }, mk);
+  // Step Functions: planned orchestration boundary around the hourly chain
+  el("rect", { x: 210, y: 76, width: 640, height: 236, rx: 8, fill: "none", stroke: "var(--plan)", "stroke-dasharray": "6 5" }, svg);
+  txt(svg, 222, 70, "Step Functions · hourly (planned)", { class: "sub" });
+  edges.forEach(([a, b, lab, plan]) => {
+    const A = N[a], B = N[b];
+    let [x1, y1] = ctr(A), [x2, y2] = ctr(B);
+    if (Math.abs(y1 - y2) < 5 || Math.abs(x1 - x2) > Math.abs(y1 - y2) * 1.2) { x1 = x1 < x2 ? A[0] + A[2] : A[0]; x2 = x1 < x2 ? B[0] : B[0] + B[2]; }
+    else { y1 = y1 < y2 ? A[1] + A[3] : A[1]; y2 = y1 < y2 ? B[1] : B[1] + B[3]; }
+    el("path", { d: `M${x1},${y1} L${x2},${y2}`, class: "edge" + (plan ? " plan" : ""), "marker-end": "url(#arr)" }, svg);
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    txt(svg, mx + (Math.abs(x1 - x2) < 5 ? 8 : 0), my - (Math.abs(y1 - y2) < 5 ? 7 : -4), lab, { class: "edge-lbl", "text-anchor": Math.abs(x1 - x2) < 5 ? "start" : "middle" });
+  });
+  // Athena reads Silver and Gold through the Catalog
+  [["silver", "athena"], ["gold", "athena"]].forEach(([a]) => {
+    const A = N[a], [ax, ay] = [A[0] + A[2] / 2, A[1] + A[3]], B = N.athena;
+    const bx = a === "silver" ? B[0] + B[2] : B[0], by = B[1] + B[3] / 2;
+    el("path", { d: `M${ax},${ay} L${ax},${by} L${bx},${by}`, class: "edge", "marker-end": "url(#arr)" }, svg);
+  });
+  Object.entries(N).forEach(([k, [x, y, w, h, lab, sub, sk, layerTone]]) => {
+    const st = sk ? S[sk] : null;
+    const g = el("g", { class: "node" }, svg);
+    el("rect", { x, y, width: w, height: h, rx: 5, fill: "var(--panel)", stroke: layerTone ? `var(${layerTone})` : "var(--line)", "stroke-dasharray": st === "planned" ? "5 4" : st === "written" ? "2 3" : null }, g);
+    if (st) el("circle", { cx: x + w - 12, cy: y + 13, r: 4.5, fill: tone[st] }, g);
+    txt(g, x + 12, y + 26, lab, { class: "lbl", fill: layerTone ? `var(${layerTone})` : null });
+    txt(g, x + 12, y + 45, sub, { class: "sub" });
+    if (st) bindTip(g, `<b>${lab}</b><br>${sub}<br>status: ${st}`);
+  });
+}
+
+function journey(F) {
+  const ev = F.event, s = F.silver, W = F.window;
+  const pct = (Math.exp(ev.observed_value) - 1) * 100;
+  $("#j-title").textContent = `${ev.symbol}, ${ev.event_time.slice(0, 16)} UTC: the largest event in Gold`;
+  $("#j-lede").textContent = `In one minute ${ev.symbol} fell ${fmt(Math.abs(pct), 2)}%, from ${fmt(s.open, 2)} to ${fmt(s.close, 2)}, on ${fmt(s.num_trades)} trades. Here is that single bar at each stage: landed raw, cleaned, then scored.`;
+  const T = Date.parse(ev.event_time.replace(" ", "T") + "Z");
+  const fields = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_buy_base", "taker_buy_quote", "ignore"];
+  const files = F.bronze.map((f) => {
+    const ing = Date.parse(f.ingested_at);
+    const lastOpen = new Date(f.last_bar[0]).toISOString().slice(11, 16), firstOpen = new Date(f.first_bar[0]).toISOString().slice(11, 16);
+    const lastUnfinished = f.last_bar[6] >= ing;
+    const raw = JSON.stringify(f.bar);
+    return `<div class="file">
+      <div class="file-head"><span><b>${esc(f.key)}</b></span><span>${fmt(f.size)} bytes</span></div>
+      <div class="file-head"><span>ingested_at <b>${f.ingested_at.slice(11, 19)}</b> · ${f.n_bars} bars ${firstOpen}–${lastOpen} · this bar is <b>#${f.position}</b></span>
+      <span>${lastUnfinished ? `last bar (${lastOpen}) still forming → dropped` : ""}</span></div>
+      <pre class="raw"><span class="dim">… </span><span class="hit">${esc(raw)}</span><span class="dim"> …</span></pre></div>`;
+  }).join("");
+  const n = F.bronze.length;
+  const silverRows = [
+    ["open_time", s.open_time, "[0] epoch ms → timestamp (UTC)"], ["open / high / low / close", `${fmt(s.open, 2)} / ${fmt(s.high, 2)} / ${fmt(s.low, 2)} / ${fmt(s.close, 2)}`, "[1]–[4] string → double"],
+    ["volume", fmt(s.volume, 5), "[5]"], ["quote_volume", fmt(s.quote_volume, 0), "[7] exact USDT turnover"], ["num_trades", fmt(s.num_trades), "[8] → int"],
+    ["log_return", fmt(s.log_return, 6), "ln(close / previous close)"], ["rolling_vol", fmt(s.rolling_vol, 6), "std of returns, trailing 20 min"],
+    ["range_pct", fmt(s.range_pct * 100, 3) + "%", "(high − low) / open"], ["ingested_at", s.ingested_at, `latest of the ${n} copies wins`],
+  ];
+  $("#journey").innerHTML = `
+    <div class="stage bronze"><div class="stage-tag">Bronze</div><div class="panel" style="display:grid;gap:12px">
+      <p>The Lambda fetches the last 15 bars every 5 minutes, so the same minute lands in <b>${n} files</b>. Binance sends twelve unnamed values, prices as strings. Bronze keeps them byte-for-byte.</p>
+      <div class="files">${files}</div>
+      <p class="note">Fields by position: ${fields.map((f, i) => `[${i}] ${f}`).join(", ")}. Overlapping fetches mean a missed run is filled in by the next one. That is why about 64% of Bronze records are duplicates (M-017).</p>
+    </div></div>
+    <div class="stage silver"><div class="stage-tag">Silver</div><div class="panel scroll" style="display:grid;gap:12px">
+      <p>Spark drops any bar still forming when it was fetched, then keeps one row per (symbol, minute): the copy with the latest <span class="mono">ingested_at</span>. ${n} copies become 1 typed row with features added.</p>
+      <table><thead><tr><th>Column</th><th class="v">Value</th><th>From</th></tr></thead><tbody>
+      ${silverRows.map(([k, v, f]) => `<tr><td class="mono">${k}</td><td class="v">${v}</td><td class="src">${f}</td></tr>`).join("")}</tbody></table>
+    </div></div>
+    <div class="stage gold"><div class="stage-tag">Gold</div><div class="panel" style="display:grid;gap:14px">
+      <p>The detector compares this minute's return with the previous ${ev.zscore_window_bars} minutes of the same pair, <b>excluding the minute itself</b>, so an extreme value cannot inflate its own baseline.</p>
+      <div class="formula">z = (observed − baseline mean) / baseline std<br>
+        &nbsp;&nbsp;= (${ev.observed_value.toExponential(4)} − ${ev.rolling_mean.toExponential(4)}) / ${ev.rolling_std.toExponential(4)}<br>
+        &nbsp;&nbsp;= <span class="z">${fmt(ev.zscore, 2)}</span> &nbsp;<span class="muted">→ |z| &gt; ${ev.zscore_threshold}, flagged as ${ev.rule}</span></div>
+      <div class="legend"><span><i style="background:var(--s1)"></i>1-minute log return</span><span><i style="background:var(--band);outline:1px solid var(--s1)"></i>baseline mean ± 3 std (trailing 60 min)</span><span><i style="background:var(--s2)"></i>the flagged minute</span></div>
+      <div class="chart-wrap" id="c-event"></div>
+      <p class="note" id="xcheck"></p>
+    </div></div>`;
+  eventChart($("#c-event"), W, T);
+  const row = W.find((r) => Date.parse(r.t.replace(" ", "T") + "Z") === T);
+  if (row) {
+    const same = Math.abs(row.base_std - ev.rolling_std) / ev.rolling_std < 1e-9 && Math.abs(row.base_mean - ev.rolling_mean) < 1e-12;
+    $("#xcheck").textContent = `The band is recomputed in Athena SQL for this page. At ${ev.event_time.slice(11, 16)} it gives std ${row.base_std.toExponential(6)} and mean ${row.base_mean.toExponential(6)}. ${same ? "These match the values Spark stored in Gold, so two engines agree." : "These differ from the values Spark stored in Gold; worth investigating."} Right after the shock, the band widens because the shock is now part of the baseline.`;
+  }
+}
+
+function eventChart(host, W, T) {
+  const w = 1000, h = 260, m = { t: 14, r: 12, b: 28, l: 64 };
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, class: "chart", role: "img" });
+  const iw = w - m.l - m.r, ih = h - m.t - m.b;
+  const lo = Math.min(...W.map((r) => Math.min(r.log_return, r.base_mean - 3 * r.base_std)));
+  const hi = Math.max(...W.map((r) => Math.max(r.log_return, r.base_mean + 3 * r.base_std)));
+  const y = (v) => m.t + ((hi - v) / (hi - lo)) * ih, bw = iw / W.length, x = (i) => m.l + i * bw;
+  const ticks = [lo, lo / 2, 0, hi].filter((v, i, a) => a.indexOf(v) === i);
+  [0, lo, lo / 2, hi].forEach((v) => { el("line", { x1: m.l, x2: w - m.r, y1: y(v), y2: y(v), class: v === 0 ? "axis" : "grid" }, svg); txt(svg, m.l - 6, y(v) + 4, (v * 1e4).toFixed(0) + " bp", { "text-anchor": "end" }); });
+  const up = W.map((r, i) => `${i ? "L" : "M"}${x(i) + bw / 2},${y(r.base_mean + 3 * r.base_std)}`).join("");
+  const dn = W.map((r, i) => `L${x(W.length - 1 - i) + bw / 2},${y(W[W.length - 1 - i].base_mean - 3 * W[W.length - 1 - i].base_std)}`).join("");
+  el("path", { d: up + dn + "Z", class: "band" }, svg);
+  W.forEach((r, i) => {
+    const t = Date.parse(r.t.replace(" ", "T") + "Z"), isE = t === T, g = el("g", { class: "hov" }, svg);
+    const y0 = y(0), y1 = y(r.log_return);
+    el("rect", { x: x(i) + 0.5, y: Math.min(y0, y1), width: Math.max(1, bw - 1), height: Math.max(0.5, Math.abs(y1 - y0)), class: "mark " + (isE ? "hl" : "s1") }, g);
+    const z = (r.log_return - r.base_mean) / r.base_std;
+    bindTip(el("rect", { x: x(i), y: m.t, width: bw, height: ih, class: "hit" }, g),
+      `<b>${r.t.slice(11, 16)} UTC</b><br>close ${fmt(r.close, 2)}<br>return ${(r.log_return * 1e4).toFixed(1)} bp<br>z ${isFinite(z) ? z.toFixed(2) : "—"}`);
+    if (i % 15 === 0) txt(svg, x(i) + bw / 2, h - 8, r.t.slice(11, 16), { "text-anchor": "middle" });
+    if (isE) txt(svg, x(i) + bw + 6, y1 + 4, `${r.t.slice(11, 16)}  z = ${z.toFixed(1)}`, { class: "ann" });
+  });
+  host.appendChild(svg);
+}
+</script>

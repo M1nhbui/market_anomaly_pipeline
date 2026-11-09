@@ -963,3 +963,23 @@ That is the strongest reliability number the project has.
 Silver now ends at 2026-11-09 10:12 (the last step read Nov 5–9 and rewrote Nov 6–9,
 including today's Bronze; I had said Nov 6–9 / Nov 7–9 — off by a day), so it is
 already stale by the gate's 15-minute rule — the fail-then-pass demonstration is set up.
+
+### The pipeline tour page (2026-11-09)
+
+The operator asked for one place to see every layer and the services between them.
+Options weighed: a snapshot page (chosen), a local Streamlit explorer (later, for
+debugging), and QuickSight/Managed Grafana (rejected — $9–24/user/month, more than the
+whole pipeline costs to run, and click-built config is weaker evidence than code).
+
+**Decision: snapshot, rebuilt by a script, not a live page.** A live page needs a public
+API in front of Athena — new infrastructure and a way for anyone with the link to run
+queries on the account. `scripts/build_tour.py` (stdlib + `aws` CLI) writes
+`tour/data.json`; `tour/index.html` renders it; republishing keeps the same link. To be
+rebuilt at milestones: Gold rebuild, slice 8, end of slice 9.
+
+The page follows the largest |z| event in Gold (BTCUSDT 2026-09-04 12:30, z = −33.4)
+through all three layers: the 3 Bronze files that carried it (positions #12, #7, #2 of
+15), the single Silver row, and the z-score worked out. **Its baseline band is
+recomputed in Athena SQL for the page, and matches the `rolling_mean`/`rolling_std`
+Spark stored in Gold exactly** — a second cross-engine check, after M-046, this time
+on the return rule.
