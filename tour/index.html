@@ -9,7 +9,7 @@
   --accent: #2a78d6; --s1: #2a78d6; --s2: #eb6834;
   --bronze: #9c6230; --silver: #66727f; --gold: #9a740c;
   --bronze-bg: #f6ece3; --silver-bg: #eceff2; --gold-bg: #f6f0dc;
-  --good: #0a7d0a; --warn: #a86b00; --plan: #8a939d;
+  --good: #0a7d0a; --warn: #a86b00; --crit: #c42b1c; --plan: #8a939d;
   --band: rgba(42,120,214,.12);
   --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -20,13 +20,13 @@
   --accent: #3987e5; --s1: #3987e5; --s2: #d95926;
   --bronze: #d29a66; --silver: #aab5c1; --gold: #d8b04a;
   --bronze-bg: #2a2018; --silver-bg: #20252b; --gold-bg: #29240f;
-  --good: #3fbf3f; --warn: #e0a22a; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; } }
+  --good: #3fbf3f; --warn: #e0a22a; --crit: #ff6b5e; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; } }
 :root[data-theme="dark"] {
   --bg: #111418; --panel: #181c21; --fg: #e7eaee; --muted: #a2abb5; --faint: #77808a; --line: #2b3138; --grid: #222830;
   --accent: #3987e5; --s1: #3987e5; --s2: #d95926;
   --bronze: #d29a66; --silver: #aab5c1; --gold: #d8b04a;
   --bronze-bg: #2a2018; --silver-bg: #20252b; --gold-bg: #29240f;
-  --good: #3fbf3f; --warn: #e0a22a; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; }
+  --good: #3fbf3f; --warn: #e0a22a; --crit: #ff6b5e; --plan: #77808a; --band: rgba(57,135,229,.2); color-scheme: dark; }
 
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
@@ -129,6 +129,40 @@ td.src { color: var(--muted); font-size: 12.5px; }
 .res .lab { font-weight: 500; font-size: 14px; }
 .res .det { font-size: 12.5px; color: var(--muted); }
 
+/* table viewer */
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tab { font: 500 13px var(--mono); padding: 8px 12px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; border-top: 3px solid var(--line); }
+.tab[aria-selected="true"] { color: var(--fg); border-top-color: var(--tone); }
+.tab.silver { --tone: var(--silver); } .tab.gold { --tone: var(--gold); }
+.tab:focus-visible, .ctl select:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tbl-panel { display: grid; gap: 12px; border-top: 4px solid var(--tone); }
+.tbl-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 18px; align-items: baseline; }
+.tbl-head h3 { font-family: var(--mono); font-weight: 500; font-size: 15px; }
+.ctl { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; font: 12px var(--mono); color: var(--muted); }
+.ctl select { font: 13px var(--mono); padding: 5px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { font: 12px var(--mono); padding: 5px 10px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--panel); }
+.tbl-scroll { overflow: auto; max-height: 560px; border: 1px solid var(--line); border-radius: 4px; }
+table.data { font: 12.5px var(--mono); width: max-content; min-width: 100%; }
+table.data th, table.data td { white-space: nowrap; padding: 6px 10px; border-bottom: 1px solid var(--grid); }
+table.data thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); text-transform: none; letter-spacing: 0; color: var(--fg); cursor: help; }
+table.data thead th small { display: block; font-size: 10.5px; color: var(--faint); font-weight: 400; }
+table.data thead th.part { background: var(--tbg); }
+table.data thead th.part small::after { content: " · partition"; }
+table.data .stick { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--line); }
+table.data thead th.stick { z-index: 3; }
+table.data td.n { text-align: right; font-variant-numeric: tabular-nums; }
+table.data td.null { color: var(--faint); font-style: italic; }
+table.data td.part { background: color-mix(in srgb, var(--tbg) 55%, transparent); }
+table.data tr.flag td { background: var(--gold-bg); }
+table.data tr.flag td.stick { background: var(--gold-bg); box-shadow: inset 3px 0 0 var(--gold), 1px 0 0 var(--line); }
+table.data tr.feat td { font-weight: 600; }
+table.data tr.run td { background: var(--bg); color: var(--muted); font-size: 12px; padding-top: 10px; }
+.flagtag { color: var(--gold); font-weight: 500; }
+.pf { display: inline-flex; gap: 5px; align-items: center; font-weight: 500; }
+.pf.ok { color: var(--good); } .pf.bad { color: var(--crit); } .pf.warn { color: var(--warn); }
 footer { font-size: 13px; color: var(--muted); display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 18px; }
 code { font: 12.5px var(--mono); background: var(--panel); border: 1px solid var(--line); padding: 1px 5px; border-radius: 3px; }
 
@@ -171,6 +205,20 @@ code { font: 12.5px var(--mono); background: var(--panel); border: 1px solid var
   </section>
 
   <section>
+    <div class="eyebrow">Real rows</div>
+    <h2>Inside the tables</h2>
+    <p>These are actual rows queried from Athena when the page was built, in the column order <span class="mono">SELECT *</span> returns. Hover a column name for its type and what it means. Partition columns are tinted: they are folder names in S3, not values stored in the Parquet files.</p>
+    <div class="tabs" role="tablist" id="tbl-tabs"></div>
+    <div class="panel tbl-panel" id="tbl-panel">
+      <div class="tbl-head"><h3 id="tbl-name"></h3><span class="note mono" id="tbl-loc"></span></div>
+      <p class="note" id="tbl-desc"></p>
+      <div class="ctl" id="tbl-ctl"></div>
+      <div class="tbl-scroll"><table class="data" id="tbl"></table></div>
+      <p class="note" id="tbl-foot"></p>
+    </div>
+  </section>
+
+  <section>
     <div class="eyebrow">Silver · completeness</div>
     <h2>Bars per day</h2>
     <p id="daily-lede"></p>
@@ -189,6 +237,14 @@ code { font: 12.5px var(--mono); background: var(--panel); border: 1px solid var
       <div class="panel"><h3>How extreme: |z| distribution</h3><div class="chart-wrap" id="c-gz"></div><p class="note">Under a normal distribution, |z| above 4 would be rare (about 1 in 16,000 minutes). Here it is common. Market returns have fat tails.</p></div>
     </div>
     <div class="panel scroll"><h3>Largest events</h3><table id="top"></table></div>
+    <div class="panel scroll"><h3>Return events cluster on US-market minutes</h3>
+      <p class="note" style="margin-top:6px">An average minute of the day holds about 15 return events over the full period. A few minutes hold far more. US Eastern times are daylight time, in force until 1 November. These line up with known market times; the cause has not been tested (M-059).</p>
+      <table style="margin-top:10px"><thead><tr><th>Minute (UTC)</th><th class="v">Events</th><th class="v">Days</th><th class="v">Mean |z|</th><th>Lines up with</th></tr></thead><tbody>
+        <tr><td class="mono">12:30</td><td class="v">100</td><td class="v">19</td><td class="v">9.43</td><td>08:30 ET, US economic data releases</td></tr>
+        <tr><td class="mono">13:30–13:37</td><td class="v">74–105</td><td class="v">14–20</td><td class="v">3.9–5.2</td><td>09:30 ET, US stock market open</td></tr>
+        <tr><td class="mono">22:00–22:02</td><td class="v">93–132</td><td class="v">24–26</td><td class="v">4.2–5.4</td><td>18:00 ET, CME futures reopen</td></tr>
+        <tr><td class="mono">20:01</td><td class="v">68</td><td class="v">14</td><td class="v">5.22</td><td>16:00 ET, US stock market close</td></tr>
+      </tbody></table></div>
   </section>
 
   <section>
@@ -327,6 +383,9 @@ function render(D) {
   /* journey */
   journey(F);
 
+  /* table viewer */
+  tables(D);
+
   /* daily completeness */
   const daily = D.silver_daily;
   const full = daily.filter((d) => d.bars === 17 * 1440).length;
@@ -369,6 +428,132 @@ function render(D) {
   $("#results").innerHTML = D.measured.map((m) => `<div class="res"><span class="mid">${m.id}</span><span class="val">${esc(m.value)}</span><span class="lab">${esc(m.label)}</span><span class="det">${esc(m.detail)}</span></div>`).join("");
 
   $("#gen").textContent = `Snapshot built ${D.generated_at.replace("T", " ")} by scripts/build_tour.py.`;
+}
+
+/* ---------------- table viewer ---------------- */
+function cell(v, type) {
+  if (v == null) return { h: "NULL", c: "null" };
+  if (type === "double") {
+    const a = Math.abs(v);
+    const h = v === 0 ? "0" : a >= 1000 ? fmt(v, 2) : a >= 1 ? fmt(v, 4) : a >= 1e-3 ? Number(v.toPrecision(5)).toString() : v.toExponential(3);
+    return { h, c: "n", t: String(v) };
+  }
+  if (type === "int" || type === "bigint") return { h: fmt(v), c: "n" };
+  if (type === "timestamp") return { h: String(v).replace(/\.000$/, "") };
+  return { h: esc(v) };
+}
+
+function tables(D) {
+  const T = D.tables, S = T.schema, F = D.featured.event;
+  const featT = F.event_time.slice(0, 19);
+  const cols = (name) => [...S[name].columns.map((c) => ({ ...c, part: false })), ...S[name].partitions.map((c) => ({ ...c, part: true, comment: "Partition key: a folder level in the S3 path, used to skip files Athena does not need." }))];
+  const views = {
+    silver: {
+      table: "crypto_anomaly_silver.clean_bars", tone: "--silver", tbg: "--silver-bg", label: "Silver · clean_bars",
+      desc: `One row per pair per minute: typed, deduplicated, with four features added. Shown: the same 20 minutes (${T.silver.from.slice(11, 16)}–${T.silver.to.slice(11, 16)} UTC on ${T.silver.from.slice(0, 10)}) for each pair, around the featured event. Rows tinted gold are minutes Gold flagged.`,
+      state: { symbol: F.symbol },
+      controls: (st, redraw) => {
+        const syms = [...new Set(T.silver.rows.map((r) => r.symbol))];
+        const counts = {}; T.silver.flags.forEach((f) => (counts[f.symbol] = (counts[f.symbol] || 0) + 1));
+        return selectCtl("Pair", syms.map((x) => [x, `${x}${counts[x] ? `  (${counts[x]} flagged)` : ""}`]), st.symbol, (v) => { st.symbol = v; redraw(); });
+      },
+      rows: (st) => T.silver.rows.filter((r) => r.symbol === st.symbol),
+      rowMeta: (r) => {
+        const t = r.open_time.slice(0, 19), fl = T.silver.flags.filter((f) => f.symbol === r.symbol && f.event_time.slice(0, 19) === t);
+        return { cls: (fl.length ? "flag" : "") + (t === featT && r.symbol === F.symbol ? " feat" : ""),
+          extra: fl.length ? fl.map((f) => `${f.rule.replace("_zscore", "")} z ${f.zscore.toFixed(1)}`).join(" · ") : "" };
+      },
+      extraHead: "In Gold?",
+      stick: "open_time",
+      foot: (n) => `${n} of ${fmt(T.silver.total)} rows. Use the pair menu to compare: AVAX's 12:30 row next to its quiet neighbours, or a pair where nothing was flagged.`,
+    },
+    gold: {
+      table: "crypto_anomaly_gold.anomaly_events", tone: "--gold", tbg: "--gold-bg", label: "Gold · anomaly_events",
+      desc: "One row per flagged minute per rule. A minute can appear twice if both its price move and its volume were unusual. Shown: the 200 newest events.",
+      state: { rule: "all", symbol: "all" },
+      controls: (st, redraw) => {
+        const syms = [...new Set(T.gold.rows.map((r) => r.symbol))].sort();
+        const wrap = document.createElement("div"); wrap.className = "ctl";
+        wrap.append(segCtl("Rule", [["all", "all"], ["return_zscore", "return"], ["volume_zscore", "volume"]], st.rule, (v) => { st.rule = v; redraw(); }),
+          selectCtl("Pair", [["all", "all pairs"], ...syms.map((x) => [x, x])], st.symbol, (v) => { st.symbol = v; redraw(); }));
+        return wrap;
+      },
+      rows: (st) => T.gold.rows.filter((r) => (st.rule === "all" || r.rule === st.rule) && (st.symbol === "all" || r.symbol === st.symbol)),
+      stick: "symbol",
+      foot: (n) => `${n} shown of ${fmt(T.gold.total)} events in the table. Read a row as: observed_value sat zscore baseline-stds away from rolling_mean. For volume rows, observed_value is log1p(volume), so it is not the raw volume column beside it.`,
+    },
+    dq: {
+      table: "crypto_anomaly_gold.dq_results", tone: "--gold", tbg: "--gold-bg", label: "Gold · dq_results",
+      desc: `The quality gate's report card. Each run writes one row per check (8 checks). A failed "fail"-severity check would stop Gold from being rebuilt; a failed "warn" check is only recorded. ${T.dq.runs} runs so far.`,
+      state: {},
+      controls: () => null,
+      rows: () => T.dq.rows,
+      stick: "check_name",
+      group: "run_id",
+      foot: (n) => `All ${n} rows. The first run failed because Silver was two months stale; Silver was refreshed and the gate passed six minutes later (M-056, M-057).`,
+    },
+  };
+
+  const tabs = $("#tbl-tabs");
+  let current = "silver";
+  Object.entries(views).forEach(([k, v]) => {
+    const b = document.createElement("button");
+    b.className = "tab " + (v.tone === "--silver" ? "silver" : "gold");
+    b.setAttribute("role", "tab"); b.textContent = v.label; b.dataset.k = k;
+    b.onclick = () => { current = k; draw(); };
+    tabs.appendChild(b);
+  });
+
+  function draw() {
+    const v = views[current], C = cols(v.table), panel = $("#tbl-panel");
+    tabs.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", b.dataset.k === current));
+    panel.style.setProperty("--tone", `var(${v.tone})`); panel.style.setProperty("--tbg", `var(${v.tbg})`);
+    $("#tbl-name").textContent = v.table;
+    $("#tbl-loc").textContent = S[v.table].location.replace(/crypto-anomaly-(\w+)-\d+/, "crypto-anomaly-$1-…") +
+      "  ·  partitioned by " + S[v.table].partitions.map((p) => p.name).join(", ");
+    $("#tbl-desc").textContent = v.desc;
+    const ctl = $("#tbl-ctl"); ctl.innerHTML = ""; const c = v.controls(v.state, draw); if (c) ctl.appendChild(c);
+    ctl.hidden = !c;
+    const rows = v.rows(v.state);
+    const order = [C.find((x) => x.name === v.stick), ...C.filter((x) => x.name !== v.stick)];
+    const head = `<thead><tr>${order.map((x) => `<th class="${x.part ? "part" : ""}${x.name === v.stick ? " stick" : ""}" data-col="${x.name}">${x.name}<small>${x.type}</small></th>`).join("")}${v.extraHead ? `<th>${v.extraHead}<small>joined from Gold</small></th>` : ""}</tr></thead>`;
+    let lastGroup = null, body = "";
+    rows.forEach((r) => {
+      if (v.group && r[v.group] !== lastGroup) {
+        lastGroup = r[v.group];
+        const run = rows.filter((q) => q[v.group] === lastGroup);
+        const blocking = run.filter((q) => q.severity === "fail" && q.passed !== "true").length, warns = run.filter((q) => q.severity === "warn" && q.passed !== "true").length;
+        body += `<tr class="run"><td class="stick" colspan="1">run ${esc(String(r.run_at).replace("T", " ").slice(0, 19))} UTC</td><td colspan="${order.length - 1}">${blocking ? `<span class="pf bad">✕ gate FAILED · ${blocking} blocking</span>` : `<span class="pf ok">✓ gate PASSED</span>`}${warns ? ` · ${warns} warning` : ""}</td></tr>`;
+      }
+      const meta = v.rowMeta ? v.rowMeta(r) : { cls: "", extra: "" };
+      body += `<tr class="${meta.cls}">` + order.map((x) => {
+        let o = cell(r[x.name], x.type);
+        if (x.name === "passed") { const ok = r.passed === "true"; o = { h: ok ? `<span class="pf ok">✓ true</span>` : `<span class="pf ${r.severity === "warn" ? "warn" : "bad"}">✕ false</span>` }; }
+        if (x.name === "run_id") o = { h: `<span title="${esc(r.run_id)}">${esc(r.run_id.slice(0, 8))}…</span>` };
+        const cl = [o.c, x.part ? "part" : "", x.name === v.stick ? "stick" : ""].filter(Boolean).join(" ");
+        return `<td class="${cl}"${o.t ? ` title="${o.t}"` : ""}>${o.h}</td>`;
+      }).join("") + (v.extraHead ? `<td>${meta.extra ? `<span class="flagtag">${meta.extra}</span>` : `<span class="muted">—</span>`}</td>` : "") + "</tr>";
+    });
+    $("#tbl").innerHTML = head + `<tbody>${body || `<tr><td colspan="${order.length}" class="muted">No rows match.</td></tr>`}</tbody>`;
+    $("#tbl").querySelectorAll("thead th[data-col]").forEach((th) => {
+      const x = C.find((q) => q.name === th.dataset.col);
+      bindTip(th, `<b>${x.name}</b> · ${x.type}${x.part ? " · partition" : ""}<br>${esc(x.comment || "")}`);
+    });
+    $("#tbl-foot").textContent = v.foot(rows.length);
+  }
+  draw();
+}
+function selectCtl(label, opts, val, on) {
+  const l = document.createElement("label"); l.className = "ctl";
+  l.innerHTML = `${label} <select>${opts.map(([k, t]) => `<option value="${esc(k)}"${k === val ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
+  l.querySelector("select").onchange = (e) => on(e.target.value);
+  return l;
+}
+function segCtl(label, opts, val, on) {
+  const w = document.createElement("span"); w.className = "ctl"; w.append(label + " ");
+  const g = document.createElement("span"); g.className = "seg";
+  opts.forEach(([k, t]) => { const b = document.createElement("button"); b.textContent = t; b.setAttribute("aria-pressed", k === val); b.onclick = () => on(k); g.appendChild(b); });
+  w.appendChild(g); return w;
 }
 
 function hbar(host, rows, rules, cls, tipParts) {
@@ -476,7 +661,8 @@ function journey(F) {
   const ev = F.event, s = F.silver, W = F.window;
   const pct = (Math.exp(ev.observed_value) - 1) * 100;
   $("#j-title").textContent = `${ev.symbol}, ${ev.event_time.slice(0, 16)} UTC: the largest event in Gold`;
-  $("#j-lede").textContent = `In one minute ${ev.symbol} fell ${fmt(Math.abs(pct), 2)}%, from ${fmt(s.open, 2)} to ${fmt(s.close, 2)}, on ${fmt(s.num_trades)} trades. Here is that single bar at each stage: landed raw, cleaned, then scored.`;
+  const dp = s.close < 10 ? 3 : 2;
+  $("#j-lede").textContent = `In one minute ${ev.symbol} ${pct < 0 ? "fell" : "rose"} ${fmt(Math.abs(pct), 2)}%, from ${fmt(s.open, dp)} to ${fmt(s.close, dp)}, on ${fmt(s.num_trades)} trades. Here is that single bar at each stage: landed raw, cleaned, then scored.`;
   const T = Date.parse(ev.event_time.replace(" ", "T") + "Z");
   const fields = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_buy_base", "taker_buy_quote", "ignore"];
   const files = F.bronze.map((f) => {
@@ -492,7 +678,7 @@ function journey(F) {
   }).join("");
   const n = F.bronze.length;
   const silverRows = [
-    ["open_time", s.open_time, "[0] epoch ms → timestamp (UTC)"], ["open / high / low / close", `${fmt(s.open, 2)} / ${fmt(s.high, 2)} / ${fmt(s.low, 2)} / ${fmt(s.close, 2)}`, "[1]–[4] string → double"],
+    ["open_time", s.open_time, "[0] epoch ms → timestamp (UTC)"], ["open / high / low / close", [s.open, s.high, s.low, s.close].map((v) => fmt(v, v < 10 ? 3 : 2)).join(" / "),"[1]–[4] string → double"],
     ["volume", fmt(s.volume, 5), "[5]"], ["quote_volume", fmt(s.quote_volume, 0), "[7] exact USDT turnover"], ["num_trades", fmt(s.num_trades), "[8] → int"],
     ["log_return", fmt(s.log_return, 6), "ln(close / previous close)"], ["rolling_vol", fmt(s.rolling_vol, 6), "std of returns, trailing 20 min"],
     ["range_pct", fmt(s.range_pct * 100, 3) + "%", "(high − low) / open"], ["ingested_at", s.ingested_at, `latest of the ${n} copies wins`],

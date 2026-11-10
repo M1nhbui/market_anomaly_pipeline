@@ -1121,6 +1121,100 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   metrics. Quotable: "ingested 1.52M one-minute bars across 17 pairs with zero missing
   minutes over two months of unattended operation."
 
+### M-056 — First production DQ gate run: predicted failures, exactly
+- **Value:** 2026-11-09 19:35 UTC against Silver ending 10:12 UTC. **Blocking: `freshness`
+  (563.0 min vs 15) and `row_count` (60.97% vs 70%)** — the two predicted before the
+  run. The other 6 checks passed: 17/17 symbols, 0 OHLC violations, 0 non-positive
+  prices, 0 non-monotonic, empty bars 1.21% (WARN limit 5%), gaps 0.0% (WARN limit 0.5%).
+  Duration 3,773 ms, 94 MB, cold start 446 ms.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09
+- **How:** `aws lambda invoke --function-name crypto-anomaly-dq-gate dq_response.json`;
+  results read from `s3://crypto-anomaly-gold-*/dq_results/date=2026-11-09/dq_193500_77018376.json`.
+- **Notes:** The prediction was derived from the window arithmetic: 10:12 → 19:35 is 563
+  min, so (1440 − 563) / 1440 = 60.9% of the window present — under 70% once Silver is
+  more than ~7.2 h stale. **The invocation itself crashed** (`KeyError: 'check'`, bug
+  #17) *after* persisting, so the history row exists but no `quality_passed` was
+  returned. Empty-bar ratio 1.21% across 17 symbols sits well inside the 5% WARN limit
+  set from SHIB's 1.89% (M-039).
+
+### M-057 — DQ gate demonstration: FAIL on stale Silver, PASS after refresh
+- **Value:** 19:38 UTC `quality_passed: false` (blocking: row_count 60.97%, freshness
+  563 min) → Silver incremental run (308 s) → 19:44 UTC **`quality_passed: true`**,
+  8/8 checks: row_count **99.51%**, freshness **7.75 min**, 17/17 symbols, 0 OHLC / price /
+  ordering violations, empty bars 0.98%, gaps 0.0%. No warnings.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09
+- **How:** `aws lambda invoke --function-name crypto-anomaly-dq-gate`, before and after
+  `aws glue start-job-run --job-name crypto-anomaly-bronze-to-silver` (default 3 h
+  lookback); per-check rows in `gold/dq_results/date=2026-11-09/`.
+- **Notes:**
+  - Predicted before the refresh: newest bar ~19:37, freshness 8–12 min, pass.
+    Measured: newest bar **19:37:00**, freshness 7.75 min. Silver run 308 s against a
+    4.5–5.5 min prediction (similar input to the 323 s calibration step).
+  - Nov 9 rewritten as 20,026 bars = 17 × 1,178 minutes (00:00–19:37): complete.
+  - **The job's `duplicate_rate_pct` read 83.94% on this run — not a duplication
+    measure in incremental mode.** Raw records include the warm-up day (Nov 8), which
+    is read and then filtered out rather than written, and the stat counts those as
+    "duplicates removed." Only full-reprocess runs (M-012, M-017) measure the true
+    duplicate rate. Do not quote incremental-run values.
+  - First demonstration of the gate doing its job on real data. With slice 8, the
+    FAIL path routes to an SNS alert instead of running silver_to_gold.
+
+### M-058 — Gold rebuilt over 79 days: firing rate 0.98%, three predictions missed
+- **Value:** silver_to_gold **SUCCEEDED in 133 s** over **1,532,564** Silver bars
+  (1,532,547 scorable). **30,156 events = 0.9839% firing rate**: 21,029 return_zscore
+  (1.372% of bars), 9,127 volume_zscore (0.596%). Return events 49.7% negative (10,450),
+  i.e. symmetric. **0 events on untraded minutes** (the one-sided volume rule holds).
+- **Label:** MEASURED
+- **Measured on:** 2026-11-09 20:26 UTC
+- **How:** `aws glue start-job-run --job-name crypto-anomaly-silver-to-gold`;
+  `SILVER_TO_GOLD_STATS` log line; per-symbol rates by Athena join of Gold on Silver.
+- **Predictions (logged before the run) vs measured:**
+  - Runtime 3–6 min → **133 s. Missed.** 44× the input of the 98 s September run cost
+    only 1.36× the time. silver_to_gold is far more startup-dominated than
+    bronze_to_silver: it reads ~1.5M rows of compact Parquet, not ~25k small JSON files.
+  - Events 33k–43k / firing 1.1–1.4% → **30,156 / 0.98%. Missed low.** The prediction
+    extrapolated September's rate, which was ~95% BTC data. Per symbol: BTC fires 3.04%
+    of bars (1.74% return + 1.30% volume); ATOM's volume rule 0.055%, SHIB 0.063%, DOT
+    0.094%. **The volume rule fires 24× less on thin pairs than on BTC.** Hypothesis
+    (not tested): a thin pair's minute volume is so erratic that its trailing σ of
+    log1p(volume) is wide, so a spike rarely clears 3σ. SHIB and PEPE also fire the
+    *return* rule least (0.60%, 0.91%) — possibly price-tick discreteness; untested.
+  - 13 UTC remains a peak → **held** (1,921 events, the top hour).
+  - 07 UTC peak (M-048) → **gone** (1,243 events, Poisson z −0.38). It was a feature of
+    the BTC-only sample.
+- **Notes:** The **return rule alone fires at 1.37%**, close to September's 1.52%, so the
+  headline drop is almost entirely the volume rule meeting illiquid pairs. Supersedes
+  M-041 as the firing-rate figure; M-041 stays as the 17-day, BTC-dominated value.
+
+### M-059 — Return anomalies cluster on specific US-market minutes
+- **Value:** return_zscore events by minute of day (UTC); mean per minute slot 14.6.
+  **12:30 → 100 events on 19 distinct days, all 17 pairs, mean |z| 9.43** (the highest
+  of any minute). **13:30–13:37 → 74–105 per minute** on 14–20 days. **22:00–22:02 →
+  93–132** on 24–26 days. **20:01 → 68** on 14 days.
+- **Label:** MEASURED (counts); the explanations are **ALIGNMENT, not tested cause**
+- **Measured on:** 2026-11-09
+- **How:** `SELECT date_format(event_time,'%H:%i'), COUNT(*), COUNT(DISTINCT date(event_time)),
+  COUNT(DISTINCT symbol), AVG(abs(zscore)) FROM gold.anomaly_events WHERE rule='return_zscore'
+  GROUP BY 1 ORDER BY 2 DESC`
+- **Notes:**
+  - Times in US Eastern daylight time (in force until 2026-11-01): 12:30 UTC = 08:30 ET,
+    the slot for US macro releases; 13:30 = 09:30 ET, NYSE open; 20:00 = 16:00 ET, NYSE
+    close; 22:00 = 18:00 ET, when CME futures reopen after the daily break. None of these
+    has been matched against an actual release calendar.
+  - **Revisits M-044.** The 12:30 hypothesis was marked NOT SUPPORTED in September on two
+    events, one carrying the whole effect. That verdict was right for that evidence.
+    With 79 days it appears on 19 separate days across every pair. Recorded as a
+    revision driven by more data, not a reversal of method.
+  - Events within one minute are **not independent**: a market-wide shock flags most
+    of the 17 pairs at once. "Distinct days" is the honest count, which is why it is
+    shown. Hour-level Poisson z-scores (13 UTC z = 18.8, 12 UTC z = 15.4) overstate
+    significance for the same reason.
+  - From 2026-11-01 (EST), the same ET events land one hour later in UTC; 13:30 UTC
+    then carries both the 08:30 releases and nothing of the open. The minute profile
+    will blur unless analysed in ET.
+
 ---
 
 ## Open measurement-design questions

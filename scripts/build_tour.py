@@ -34,6 +34,7 @@ OUT = ROOT / "tour" / "data.json"
 WORKGROUP = "crypto-anomaly"
 SILVER = "crypto_anomaly_silver.clean_bars"
 GOLD = "crypto_anomaly_gold.anomaly_events"
+DQ = "crypto_anomaly_gold.dq_results"
 SYMBOLS = json.loads((ROOT / "config" / "symbols.json").read_text())
 
 # Headline results that are not recomputable from a query (they came from
@@ -62,7 +63,7 @@ MEASURED = [
 # Build status of each pipeline component, shown on the architecture diagram.
 STATUS = {
     "scheduler": "deployed", "ingestion": "deployed", "bronze": "deployed",
-    "bronze_to_silver": "deployed", "silver": "deployed", "dq_gate": "written",
+    "bronze_to_silver": "deployed", "silver": "deployed", "dq_gate": "deployed",
     "silver_to_gold": "deployed", "gold": "deployed", "athena": "deployed",
     "step_functions": "planned", "sns": "planned",
 }
@@ -229,6 +230,46 @@ def main():
     bronze_files.sort(key=lambda f: f["ingested_at"])
 
     data["featured"] = {"event": ev, "silver": silver_row, "window": window, "bronze": bronze_files}
+
+    # --- Real rows from each table, for the table viewer ---
+    # Silver: the same 20 minutes for every pair, centred on the featured bar, so the
+    # page can show one pair's ordinary minutes next to its anomalous one. Gold: the
+    # newest events. dq_results: every gate run so far (a few rows per run).
+    step("Table samples and schemas")
+    schema = {}
+    for db in ("crypto_anomaly_silver", "crypto_anomaly_gold"):
+        for t_ in aws("glue", "get-tables", "--database-name", db)["TableList"]:
+            schema[f"{db}.{t_['Name']}"] = {
+                "columns": [{"name": c["Name"], "type": c["Type"], "comment": c.get("Comment", "")}
+                            for c in t_["StorageDescriptor"]["Columns"]],
+                "partitions": [{"name": c["Name"], "type": c["Type"]} for c in t_.get("PartitionKeys", [])],
+                "location": t_["StorageDescriptor"]["Location"],
+            }
+    lo, hi = (t - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S"), (t + timedelta(minutes=9)).strftime("%Y-%m-%d %H:%M:%S")
+    silver_sample = typed(athena(
+        f"SELECT symbol, \"date\", CAST(open_time AS varchar) AS open_time, CAST(close_time AS varchar) AS close_time, "
+        f"open, high, low, close, volume, quote_volume, num_trades, taker_buy_base, log_return, rolling_vol, "
+        f"dollar_volume, range_pct, CAST(ingested_at AS varchar) AS ingested_at, source_host "
+        f"FROM {SILVER} WHERE \"date\" = '{d0}' AND open_time BETWEEN TIMESTAMP '{lo}' AND TIMESTAMP '{hi}' "
+        f"ORDER BY symbol, open_time"))
+    silver_flags = typed(athena(
+        f"SELECT symbol, CAST(event_time AS varchar) AS event_time, rule, zscore FROM {GOLD} "
+        f"WHERE \"date\" = '{d0}' AND event_time BETWEEN TIMESTAMP '{lo}' AND TIMESTAMP '{hi}'"))
+    gold_cols = ("symbol, CAST(event_time AS varchar) AS event_time, rule, rule_direction, observed_value, "
+                 "observed_transform, rolling_mean, rolling_std, zscore, close_price, volume, num_trades, "
+                 "zscore_window_bars, zscore_threshold, \"date\"")
+    gold_sample = typed(athena(f"SELECT {gold_cols} FROM {GOLD} ORDER BY event_time DESC, symbol LIMIT 200"))
+    dq_sample = typed(athena(
+        f"SELECT run_id, run_at, check_name, severity, passed, observed, threshold, detail, \"date\" "
+        f"FROM {DQ} ORDER BY run_at DESC, severity, check_name LIMIT 200"))
+    dq_count = typed(athena(f"SELECT COUNT(*) AS n, COUNT(DISTINCT run_id) AS runs FROM {DQ}"))[0]
+    data["tables"] = {
+        "schema": schema,
+        "silver": {"rows": silver_sample, "flags": silver_flags, "from": lo, "to": hi,
+                   "total": data["silver_totals"]["bars"]},
+        "gold": {"rows": gold_sample, "total": data["gold_totals"]["events"]},
+        "dq": {"rows": dq_sample, "total": dq_count["n"], "runs": dq_count["runs"]},
+    }
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(data, indent=1, default=str))

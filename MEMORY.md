@@ -983,3 +983,91 @@ through all three layers: the 3 Bronze files that carried it (positions #12, #7,
 recomputed in Athena SQL for the page, and matches the `rolling_mean`/`rolling_std`
 Spark stored in Gold exactly** — a second cross-engine check, after M-046, this time
 on the return rule.
+
+## Slice 7 deployed — the DQ gate in production (2026-11-09)
+
+`terraform plan` after two months and a reinstalled CLI showed only additions — no
+drift. Applied; Lambda active, `dq_results` registered.
+
+**Prediction before the first invocation:** Silver ended at 10:12 UTC, so not only
+freshness but row count should fail — a 24-hour window missing ~9 hours holds ~60% of
+the expected bars, under the 70% floor. Measured (M-056): freshness 563 min, row_count
+60.97%, the other six passing. Exact.
+
+### Bug #17 — the half-finished rename from bug #12
+
+The invocation itself crashed:
+
+```
+KeyError: 'check'   at "blocking_failures": [r["check"] for r in blocking]
+```
+
+In September, `check` was renamed to `check_name` because CHECK is reserved in Athena
+(bug #12). The rename reached `evaluate()` but missed two lines in `lambda_handler()`.
+All 15 gate tests called `evaluate()` directly — none called the handler — so nothing
+read those lines. The crash came *after* `persist()`, so the history row was written
+and the prediction could still be checked from S3; but the caller got an error instead
+of `quality_passed`, which in slice 8 would have failed the Step Functions run on every
+bad-data day rather than routing it to the alert branch.
+
+A detail that explains why September's testing could not have caught it even by luck:
+**on a healthy run the broken line never executes** — the list comprehensions iterate
+over empty lists. The bug only fires when a check fails, i.e. exactly when the gate is
+doing its job.
+
+Fix: two-line correction plus two handler tests (AWS calls stubbed). The failure-path
+test was run against the unfixed code first and reproduced the production `KeyError`;
+the healthy-path test passed on the broken code — which is the bug's whole story in one
+result. 64 tests passing.
+
+Lesson recorded: "evaluate() is pure, so test evaluate()" was a good design and an
+incomplete test plan. The thin glue around the pure core still needs one test.
+
+### Fail, then pass (M-057)
+
+With the fix deployed, the gate returned a clean `quality_passed: false` naming
+`row_count` and `freshness`. One incremental Silver run (308 s, newest bar 19:37:00 —
+the predicted minute exactly) and the gate passed all 8 checks at 19:44: freshness
+7.75 min, 99.5% of the window present. The demonstration planned in September finally
+happened — two months late, and better for it, because the "fail" half came from a
+real two-month staleness rather than a staged one.
+
+A measurement trap found on the way: the incremental run reported an 83.94% "duplicate
+rate." It is not one. In incremental mode the warm-up day is read and then filtered
+out, and the stat counts those rows as duplicates removed. The definition only holds
+on full reprocess (M-012/M-017). Logged so the number never reaches a resume.
+
+## Gold rebuilt over 79 days (2026-11-09)
+
+Predictions were logged first: 3–6 min, 33k–43k events, firing 1.1–1.4%, 13 UTC holds,
+07 UTC uncertain. Measured (M-058): **133 s, 30,156 events, 0.98%.** Two of the three
+numeric predictions missed.
+
+**Why the firing rate missed.** September's 1.24% came from a dataset that was ~95%
+BTC. Across 17 pairs the return rule still fires at 1.37%, near September's 1.52%. The
+drop is the volume rule: 1.30% of BTC's bars but 0.055% of ATOM's — 24× less on thin
+pairs. The prediction carried one pair's behaviour to seventeen. The same mistake as
+the Lambda extrapolation in slice 5, in a different place.
+
+**Why runtime missed.** 44× the input, 1.36× the time. This job reads compact Parquet,
+not tens of thousands of small JSON files. "Glue is startup-dominated" turns out to be
+true or false per job, depending on what it reads.
+
+### The 12:30 hypothesis, revisited (M-059)
+
+In September, two events at 12:30 UTC suggested US data releases; a sensitivity check
+showed one event carried the effect, and it was recorded as NOT SUPPORTED. That was the
+right call on that evidence.
+
+With 79 days, the minute-of-day profile of return events is unmistakable. The average
+minute has 14.6 events; **12:30 has 100, on 19 separate days, across all 17 pairs, with
+the highest mean |z| of any minute (9.43).** The minutes after 13:30 (the NYSE open),
+22:00–22:02 (CME futures reopen) and 20:01 (the NYSE close) stand out too.
+
+Stated carefully: these are alignments with known US-market times, not tested causes —
+no economic calendar has been joined in. Events within a minute are correlated across
+pairs, so "distinct days" is the honest count. And September's 07 UTC peak, which never
+had an explanation, has disappeared: it belonged to the BTC-only sample.
+
+The sequence — hypothesis, rejected on thin evidence, revisited with more data — is
+the point. The September rejection was correct, and so is the revision.

@@ -237,3 +237,49 @@ def test_check_names_are_unique(spark_free=None):
     """They become a GROUP BY key in the persisted DQ history table."""
     names = [r["check_name"] for r in dq.evaluate(healthy_metrics(), NOW, WINDOW, SYMBOLS)]
     assert len(names) == len(set(names))
+
+
+# -----------------------------------------------------------------------------
+# THE HANDLER (added 2026-11-09 after the first production invocation crashed)
+#
+# Every test above calls evaluate(). None called lambda_handler(), so when bug #12
+# renamed the result key `check` -> `check_name`, the two lines in the handler that
+# build `blocking_failures` and `warnings` kept reading r["check"]. The first real run
+# raised KeyError: 'check' - AFTER persisting results, so the history row exists but
+# the caller (Step Functions, later) gets an error instead of quality_passed.
+# These tests run the real handler with only the AWS-touching functions stubbed.
+# -----------------------------------------------------------------------------
+
+
+def run_handler(monkeypatch, **metric_overrides):
+    real_now = datetime.now(timezone.utc)
+    metrics = healthy_metrics(**metric_overrides)
+    # healthy_metrics is pinned to NOW; re-anchor freshness to the handler's real clock
+    # unless the test overrides it.
+    if "max_open_time" not in metric_overrides:
+        metrics["max_open_time"] = int((real_now - timedelta(minutes=4)).timestamp())
+    monkeypatch.setattr(dq, "collect_metrics", lambda *a, **k: metrics)
+    monkeypatch.setattr(dq, "persist", lambda *a, **k: "s3://bucket/dq_results/x.json")
+    ctx = types.SimpleNamespace(aws_request_id="test-run")
+    return dq.lambda_handler({}, ctx)
+
+
+def test_handler_reports_a_healthy_run(monkeypatch):
+    resp = run_handler(monkeypatch)
+    assert resp["quality_passed"] is True
+    assert resp["blocking_failures"] == []
+    assert resp["warnings"] == []
+    assert resp["checks_run"] == 8
+
+
+def test_handler_names_blocking_failures_and_warnings(monkeypatch):
+    stale = int((datetime.now(timezone.utc) - timedelta(hours=9)).timestamp())
+    resp = run_handler(
+        monkeypatch,
+        max_open_time=stale,
+        row_count=int(EXPECTED_ROWS * 0.6),
+        zero_trade_bars=int(EXPECTED_ROWS * 0.6 * 0.10),  # 10% untraded -> WARN
+    )
+    assert resp["quality_passed"] is False
+    assert sorted(resp["blocking_failures"]) == ["freshness", "row_count"]
+    assert resp["warnings"] == ["empty_bar_ratio"]

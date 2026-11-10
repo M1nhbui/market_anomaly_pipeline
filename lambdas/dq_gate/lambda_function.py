@@ -389,8 +389,8 @@ def lambda_handler(event, context):
         "window_hours": WINDOW_HOURS,
         "checks_run": len(results),
         "checks_failed": len(failed),
-        "blocking_failures": [r["check"] for r in blocking],
-        "warnings": [r["check"] for r in failed if r["severity"] == WARN],
+        "blocking_failures": [r["check_name"] for r in blocking],
+        "warnings": [r["check_name"] for r in failed if r["severity"] == WARN],
         "metrics": metrics,
         "results_location": location,
     }
