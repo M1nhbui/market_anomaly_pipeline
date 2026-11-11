@@ -1215,6 +1215,25 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     then carries both the 08:30 releases and nothing of the open. The minute profile
     will blur unless analysed in ET.
 
+### M-060 — Per-run cost at 17 pairs: M-020's dollar figures superseded
+- **Value:** one run (Silver → gate → Gold) ≈ **$0.108**. Hourly ≈ **$77.6/month**;
+  daily ≈ **$3.23/month**.
+- **Label:** DERIVED (from two MEASURED durations, each n=1)
+- **Measured on:** 2026-11-10 (derivation; durations from 2026-11-09)
+- **How:** Silver 308 s (M-057, 3 h lookback) + Gold 133 s (M-058, full rebuild) =
+  441 s × 2 DPU ÷ 3600 × $0.44/DPU-h = $0.1078. Gate Lambda, Athena and Step Functions
+  transitions add < $0.001. × 720 runs = $77.6; × 30 = $3.23.
+- **Notes:**
+  - **Correction, 2026-11-10:** M-020's "$33.09/month hourly" was derived from
+    94 s runs at 1 pair (August) and no longer holds at 17 pairs. Its **12.0×**
+    hourly vs 5-minute multiple is unaffected, because it is the run-count ratio.
+    The dollar amounts in README, tour page and any resume line need updating
+    (slice 9). M-020 itself is left as written.
+  - This is why ADR-0002 bounds the hourly design to one 24-run measurement window
+    and runs daily afterwards: hourly-forever would exceed the $10 budget ~8×.
+  - Both durations are single runs; slice 8 adds a 26 h lookback, untested so far.
+    The window's 24 runs replace this derivation with a measured distribution.
+
 ---
 
 ## Open measurement-design questions
