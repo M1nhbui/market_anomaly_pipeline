@@ -6,6 +6,8 @@ A portfolio data-engineering project. It ingests Binance 1-minute bars for 17 pa
 
 - **The owner is learning AWS and data engineering** and needs to defend every design choice in interviews. Explain each decision and the alternatives you rejected. Go deep on the Spark windows, the z-scores, the DQ gate and IAM; keep plumbing brief. For walkthroughs, go one step at a time.
 - **Write code and tests locally first** (`./scripts/run_tests.sh`). The owner runs `terraform plan/apply`. Invoking a Lambda or running a Glue job also needs the owner's go-ahead in that session.
+- **The owner commits and pushes.** Don't run `git commit` or `git push`. When work is ready, give the owner a commit message (with `Closes #N` when it finishes a ticket) and the list of files to stage.
+- **Keep the owner oriented on tickets.** In every update about ticket work, include a short tracker of the current slice's tickets: number, what each one does in plain words, and its status (done / in progress / next / blocked).
 - **Measure, don't estimate.** Every number goes into `METRICS.md` as an `M-0xx` entry labelled MEASURED, DERIVED, EXTRAPOLATED or ESTIMATED. Never round up. Log the prediction before measuring, and record misses.
 - **`MEMORY.md` is append-only.** It is the chronological project story: add each event, decision and bug at the end. Never rewrite past entries; add a dated correction instead.
 - **Keep `CLAUDE.md` current.** Edit rules here when they change. History belongs in `MEMORY.md`.

@@ -1293,6 +1293,48 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     `ConcurrentRunsExceededException`. Both are wired and tested offline, and either one
     will show up in execution history the first time it happens.
 
+### M-063 — 26-hour lookback in the chain (ticket #4): Silver ~2× the 3-hour cost
+- **Predictions (before any run):**
+  - **Invalid input** `{"lookback_hours": 0}`: fails at `InvalidLookback` within ~1 s,
+    with no Glue run, no gate, no email.
+  - **Default run** (26 h, ~03:50): targets Nov 10 and Nov 11, reads Nov 9–11 (~2.2 days
+    of Bronze, against ~1.1 days for M-061's 178 s). Silver **300–420 s**. Runtime is not
+    linear in days read: 3-day backfill steps read 5 days in ~575 s (M-054). Gate
+    passes. Gold **150–180 s**. Whole run **8–11 min**.
+  - **Override run** `{"lookback_hours": 40}`: the Glue run's arguments show
+    `--lookback-hours = 40`; it targets Nov 9–11 and reads Nov 8–11. Silver
+    **420–520 s** (like the 453 s catch-up, M-061).
+- **Value:**
+  | Run | Lookback reaching Glue | Silver | Gate | Gold | Whole run | Glue cost |
+  |---|---|---|---|---|---|---|
+  | `ticket-4-invalid-lookback-0` | none, rejected | — | — | — | **0.05 s**, FAILED at `InvalidLookback` | $0 |
+  | `ticket-4-default-26h` | **26** | **354 s** | 3.5 s, pass | **181 s** | **663 s (11.05 min)** | $0.131 |
+  | `ticket-4-override-40h` | **40** | **503 s** | 4.5 s, pass | **179 s** | **775 s (12.9 min)** | $0.167 |
+
+  Silver afterwards: Nov 8, 9 and 10 at exactly 24,480 bars; Nov 11 at 4,131 (17 × 243,
+  complete through 04:02 UTC).
+- **Label:** MEASURED (costs DERIVED: billed seconds × 2 DPU × $0.44/DPU-h)
+- **Measured on:** 2026-11-11 03:50–04:15 UTC
+- **How:** `aws stepfunctions start-execution` (inputs as named), execution history, and
+  `aws glue get-job-run` (`Arguments."--lookback-hours"`, ExecutionTime, CompletedOn).
+- **Predictions vs measured:**
+  - Invalid input fails in ~1 s with no work: **hit** (0.05 s; Pass, Pass, Choice, Fail only).
+  - Default: Silver 300–420 s → 354: **hit**. Gold 150–180 → 181: **missed by 1 s**.
+    Whole run 8–11 min → 11.05: **missed, just over**.
+  - Override: argument 40 reaches Glue: **hit**. Silver 420–520 s → 503: **hit**.
+- **Notes:**
+  - **The 26-hour lookback roughly doubles Silver's runtime** (354 s vs 178 s for the 3 h
+    lookback, M-061): it rewrites two days instead of one. A run now costs ≈ **$0.131**,
+    up from M-060's $0.108 derivation. Updated ADR-0002 figures: window 24 × $0.131 ≈
+    **$3.14**; daily ≈ **$3.93/month**. This is the measured price of never silently
+    skipping data.
+  - **Polling lag again:** Glue CompletedOn → state exit was 55 s (Silver) + 48 s (Gold) =
+    **103 s of 663 s (16%)** on the default run, and 24 s + 41 s = 65 s on the override
+    run. Across three runs the per-step lag ranges 20–55 s.
+  - Gold took 181 s and 179 s, against 157 s in M-061 with less Silver. It is creeping up,
+    as ticket #7 anticipates.
+
+
 ---
 
 ## Open measurement-design questions

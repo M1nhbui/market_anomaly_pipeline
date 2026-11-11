@@ -1,13 +1,57 @@
 {
-  "Comment": "Transform chain: Silver, then the gate, then Gold only if the gate passes. Emails only on a blocked gate or a crashed step. ADR-0001. Rendered by Terraform templatefile(); tested offline by tests/test_state_machine.py.",
-  "StartAt": "Silver",
+  "Comment": "Transform chain: Silver, then the gate, then Gold only if the gate passes. Emails only on a blocked gate or a crashed step (ADR-0001). Lookback defaults to 26 h, overridable by {\"lookback_hours\": N} for 1 <= N <= 72 (ADR-0002). Rendered by Terraform templatefile(); tested offline by tests/test_state_machine.py.",
+  "StartAt": "Defaults",
   "States": {
+    "Defaults": {
+      "Comment": "ADR-0002: 26 h covers a daily run's whole day with 2 h of margin, and lets any run catch up after a failed predecessor.",
+      "Type": "Pass",
+      "Result": {
+        "lookback_hours": 26
+      },
+      "ResultPath": "$.defaults",
+      "Next": "Config"
+    },
+    "Config": {
+      "Comment": "Run input wins over defaults: a manual run may pass {\"lookback_hours\": N}. Scheduled runs pass {}.",
+      "Type": "Pass",
+      "Parameters": {
+        "config.$": "States.JsonMerge($.defaults, $$.Execution.Input, false)"
+      },
+      "Next": "LookbackValid"
+    },
+    "LookbackValid": {
+      "Comment": "0 means FULL REPROCESS to the Silver job, which would blow the 25-minute timeout at today's size. Gaps longer than 3 days go through scripts/backfill_silver.sh.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.config.lookback_hours",
+              "IsNumeric": true
+            },
+            {
+              "Variable": "$.config.lookback_hours",
+              "NumericGreaterThanEquals": 1
+            },
+            {
+              "Variable": "$.config.lookback_hours",
+              "NumericLessThanEquals": 72
+            }
+          ],
+          "Next": "Silver"
+        }
+      ],
+      "Default": "InvalidLookback"
+    },
     "Silver": {
       "Comment": "Run the Bronze->Silver Glue job and wait for it to finish (.sync), so the gate never checks a half-written Silver.",
       "Type": "Task",
       "Resource": "arn:aws:states:::glue:startJobRun.sync",
       "Parameters": {
-        "JobName": "${silver_job_name}"
+        "JobName": "${silver_job_name}",
+        "Arguments": {
+          "--lookback-hours.$": "States.Format('{}', $.config.lookback_hours)"
+        }
       },
       "ResultSelector": {
         "job_run_id.$": "$.Id",
@@ -18,7 +62,9 @@
       "Retry": [
         {
           "Comment": "Bug #16: Glue reports a run finished seconds before it frees the job's single run slot. Seen in production on 2026-11-11 (M-061).",
-          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 3,
           "BackoffRate": 2.0
@@ -26,7 +72,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
           "Next": "SilverFailed"
         }
@@ -64,7 +112,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
           "Next": "GateFailed"
         }
@@ -99,7 +149,9 @@
       "Retry": [
         {
           "Comment": "Bug #16, as for Silver.",
-          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 3,
           "BackoffRate": 2.0
@@ -107,7 +159,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
           "Next": "GoldFailed"
         }
@@ -166,6 +220,11 @@
       "Type": "Fail",
       "Error": "StepFailed",
       "Cause": "A step failed and was not retried. The alert email names the step and its error."
+    },
+    "InvalidLookback": {
+      "Type": "Fail",
+      "Error": "InvalidLookback",
+      "Cause": "lookback_hours must be a number from 1 to 72. Nothing ran. For longer gaps use scripts/backfill_silver.sh."
     }
   }
 }

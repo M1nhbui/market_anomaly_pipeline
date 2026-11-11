@@ -171,9 +171,12 @@ def test_gold_cannot_be_reached_without_running_silver_and_the_gate(sm):
     assert gold not in reachable(sm, without={gate_state(sm)})
 
 
-def test_silver_runs_before_the_gate(sm):
+def test_silver_is_the_first_work_and_runs_before_the_gate(sm):
+    # Only input handling (Pass / Choice / Fail) may come before Silver - no Glue job,
+    # no gate, no email.
     silver = glue_state(sm, TEMPLATE_VARS["silver_job_name"])
-    assert sm["StartAt"] == silver
+    before_silver = reachable(sm, without={silver})
+    assert all(sm["States"][n]["Type"] in ("Pass", "Choice", "Fail") for n in before_silver)
     assert gate_state(sm) in reachable(sm, start=silver)
 
 
@@ -275,3 +278,61 @@ def test_alerts_publish_to_the_configured_topic(sm):
     assert alerts
     for a in alerts:
         assert a["Parameters"]["TopicArn"] == TEMPLATE_VARS["alert_topic_arn"]
+
+
+# --- lookback (ticket #4) -------------------------------------------------------------
+#
+# ADR-0002: every run looks back 26 hours unless a manual run says otherwise. The
+# merge itself is an intrinsic function that only AWS evaluates, so these tests pin
+# the wiring offline; the TestState drill in ticket #4 checks the evaluation.
+
+DEFAULT_LOOKBACK_HOURS = 26
+MIN_LOOKBACK_HOURS, MAX_LOOKBACK_HOURS = 1, 72
+
+
+def silver_lookback_path(sm):
+    silver = sm["States"][glue_state(sm, TEMPLATE_VARS["silver_job_name"])]
+    expr = silver["Parameters"]["Arguments"]["--lookback-hours.$"]
+    # Glue arguments must be strings; States.Format turns a JSON number into one.
+    m = re.fullmatch(r"States\.Format\('\{\}', (\$\.[\w.]+)\)", expr)
+    assert m, f"Silver's --lookback-hours should be States.Format('{{}}', <path>), got {expr}"
+    return m.group(1)
+
+
+def test_silver_receives_the_lookback_from_the_run_config(sm):
+    assert silver_lookback_path(sm) == "$.config.lookback_hours"
+
+
+def test_the_default_lookback_is_26_hours(sm):
+    defaults = [s for s in sm["States"].values() if s["Type"] == "Pass" and s.get("ResultPath") == "$.defaults"]
+    assert len(defaults) == 1
+    assert defaults[0]["Result"] == {"lookback_hours": DEFAULT_LOOKBACK_HOURS}
+
+
+def test_the_run_input_overrides_the_default(sm):
+    # States.JsonMerge(a, b, false): keys in b win. The execution input must be b.
+    merges = [
+        s["Parameters"]["config.$"] for s in sm["States"].values()
+        if s["Type"] == "Pass" and "config.$" in s.get("Parameters", {})
+    ]
+    assert merges == ["States.JsonMerge($.defaults, $$.Execution.Input, false)"]
+
+
+def test_an_out_of_range_lookback_stops_before_any_work(sm):
+    # 0 means FULL REPROCESS to the Silver job, which at today's size would blow the
+    # 25-minute timeout; multi-day gaps belong to scripts/backfill_silver.sh.
+    silver = glue_state(sm, TEMPLATE_VARS["silver_job_name"])
+    guards = [
+        (n, s) for n, s in sm["States"].items()
+        if s["Type"] == "Choice" and any(r["Next"] == silver for r in s["Choices"])
+    ]
+    assert len(guards) == 1, "exactly one Choice should admit a run into Silver"
+    name, guard = guards[0]
+    rule = next(r for r in guard["Choices"] if r["Next"] == silver)
+    conds = {(c["Variable"], k, v) for c in rule["And"] for k, v in c.items() if k != "Variable"}
+    assert ("$.config.lookback_hours", "IsNumeric", True) in conds
+    assert ("$.config.lookback_hours", "NumericGreaterThanEquals", MIN_LOOKBACK_HOURS) in conds
+    assert ("$.config.lookback_hours", "NumericLessThanEquals", MAX_LOOKBACK_HOURS) in conds
+    rejected = reachable(sm, start=guard["Default"])
+    assert all(sm["States"][n]["Type"] == "Fail" for n in rejected), \
+        "a rejected lookback must fail immediately: no Glue, no gate, no email"

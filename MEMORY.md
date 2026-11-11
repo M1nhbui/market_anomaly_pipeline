@@ -1124,3 +1124,21 @@ The design changed as a result (ADR-0002): one bounded window of 24 hourly runs 
 AWS's own definition validator accepted the result. Then TestState ran the deployed Choice and both alert states with made-up inputs, and **both emails arrived** (M-062). Nothing touched Silver or Gold.
 
 **A small departure, written down.** The ticket asked for observed values in the gate email, but the gate's response lists only check names, and this slice doesn't change the gate. The email carries the query that retrieves the values instead.
+
+---
+
+## 2026-11-11 — Ticket #4: every run looks back 26 hours
+
+**What changed.** The state machine now handles its own input before doing any work. It sets a default of 26 hours, merges in the run's input (a manual run can ask for `{"lookback_hours": N}`), and admits only a number from 1 to 72. Anything else fails at once, with no Glue run, no gate and no email. The limit exists mainly for 0, which the Silver job treats as "reprocess all history" and which would blow the 25-minute timeout at today's size.
+
+**How it was proven.**
+- 4 new offline tests, each confirmed by a deliberate sabotage.
+- TestState runs of the merge and the guard against AWS, *before* deploying.
+- Three real executions (M-063):
+  - a run with 0 failed in 0.05 s
+  - the default run passed 26 to Glue and succeeded in 11.05 min
+  - the override run passed 40 and succeeded in 12.9 min
+
+**What it costs, measured.** Silver with 26 hours took 354 s, against 178 s with 3 hours, about 2×, because each run rewrites two days instead of one. A run is now ≈ $0.131, not the $0.108 assumed in ADR-0002. The window becomes ≈ $3.14 and daily running ≈ $3.93/month, still inside the budget. This is the price of the property ADR-0002 bought: a run never silently skips data, and any run catches up after a failed predecessor.
+
+**Two of the predictions missed narrowly**: Gold by 1 s and the whole run by 3 s. They are recorded as misses rather than rounded away.
