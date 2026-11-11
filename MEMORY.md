@@ -1142,3 +1142,13 @@ AWS's own definition validator accepted the result. Then TestState ran the deplo
 **What it costs, measured.** Silver with 26 hours took 354 s, against 178 s with 3 hours, about 2×, because each run rewrites two days instead of one. A run is now ≈ $0.131, not the $0.108 assumed in ADR-0002. The window becomes ≈ $3.14 and daily running ≈ $3.93/month, still inside the budget. This is the price of the property ADR-0002 bought: a run never silently skips data, and any run catches up after a failed predecessor.
 
 **Two of the predictions missed narrowly**: Gold by 1 s and the whole run by 3 s. They are recorded as misses rather than rounded away.
+
+---
+
+## 2026-11-11 — Ticket #5: the pipeline started running itself
+
+**What changed.** Two EventBridge Scheduler schedules now start the transform chain, both in UTC and both through a role that can do one thing: start this state machine.
+- **Hourly, bounded:** fires at :00 from 2026-11-11 06:00 UTC to 2026-11-12 05:00 UTC, exactly 24 times, then stops by its own end date. Forgetting about it cannot overrun the budget.
+- **Daily, permanent:** 00:30 UTC from 2026-11-13. The start/end dates come from one Terraform variable, `measurement_window_start`, so the window was placed deliberately.
+
+**How it was proven.** Predictions for the whole window were logged first (M-064). Then the first scheduled run fired at 06:00:18 UTC, nobody touching anything, and succeeded in 11.35 min with the gate passing (M-065). Two first-run misses are written down instead of waved off: Gold took 218 s against a predicted 175–200 s, and the run cost $0.149 against $0.12–0.14. Whether those hold across 24 runs is ticket #6's question.

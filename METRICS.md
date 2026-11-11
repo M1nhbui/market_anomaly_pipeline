@@ -1335,6 +1335,43 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     as ticket #7 anticipates.
 
 
+### M-064 — Measurement window (ticket #5/#6) — PREDICTIONS logged 2026-11-11 04:45 UTC
+- **Setup:** 24 hourly runs at :00 from **2026-11-11 06:00 UTC** to 2026-11-12 05:00
+  UTC, each with the default 26 h lookback; then daily at 00:30 UTC from 2026-11-13.
+- **Predictions (before the first scheduled run):**
+  - **Invocations:** exactly **24**, then none until the first daily run at 2026-11-13 00:30.
+  - **Run duration:** p50 **11 min**, range **10–13 min**. Silver **330–420 s**, varying
+    with hour of day because today's partial day grows. Gold **175–200 s**, creeping up
+    across the window. Gate ~4 s.
+  - **Data delay** (bar close → queryable in Gold): a bar waits for the next :00 run, then
+    ~11 min for it to finish. p50 **38–46 min**, max **70–80 min**. The max is for bars
+    closing in the last few minutes before :00, which miss that run's read.
+  - **Gate pass rate:** **24/24**. Freshness at gate time ~8–12 min against a 15 min limit.
+  - **Cost per run:** **$0.12–0.14** from Glue billed seconds; window total **$2.9–3.4**.
+  - **Retries:** **0** ConcurrentRunsExceeded retries. Runs are ~49 min apart, so the
+    Glue slots are always free.
+  - **Polling lag:** 20–55 s per Glue step, as in M-061 and M-063.
+- **Measured:** _pending (ticket #6)_
+
+### M-065 — First scheduled run (ticket #5): fired on time, succeeded in 11.35 min
+- **Run:** execution `736af404-60f8-4c92-9237-57f1b74cdec2`, started by the hourly
+  schedule with input `{}` (default 26 h lookback). **MEASURED** from the execution history.
+- **Fire time:** cron `0 * * * ? *` at 06:00:00 UTC; execution started **06:00:18.076**.
+  The scheduler fired **18 s** after the minute (no flexible window is set; EventBridge
+  Scheduler does not promise second-level precision).
+- **Run duration:** **681.2 s** (11.35 min), 06:00:18.076 → 06:11:39.308.
+  - Silver step 429.97 s, of which Glue billed `ExecutionTime` **393 s**; polling lag 37 s.
+  - Gate step 5.59 s; **passed**, no blocking failures, no warnings
+    (gate run `9187c40a-de60-4107-a0a7-10e64bc782d4`).
+  - Gold step 245.58 s, of which Glue billed `ExecutionTime` **218 s**; polling lag 28 s.
+- **Cost (DERIVED):** (393 + 218) s × 2 DPU × $0.44/DPU-h = **$0.1494**.
+- **Against M-064 (one run, not the window's verdict):** duration inside 10–13 min; Silver
+  inside 330–420 s; polling lag inside 20–55 s; gate passed. **Gold 218 s is above the
+  175–200 s prediction, and the cost $0.1494 is above the $0.12–0.14 range** — both misses
+  on the first run, recorded as such. The window total (ticket #6) decides the verdict.
+- **Schedule state after the run:** hourly schedule ENABLED, window 2026-11-11 05:55 UTC →
+  2026-11-12 05:30 UTC, so 23 fires remain.
+
 ---
 
 ## Open measurement-design questions

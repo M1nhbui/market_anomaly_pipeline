@@ -152,3 +152,27 @@ variable "athena_results_retention_days" {
   type        = number
   default     = 30
 }
+
+variable "measurement_window_start" {
+  description = <<-EOT
+    First run of the hourly measurement window (ADR-0002), as a UTC timestamp on the
+    hour, for example "2026-11-11T06:00:00Z". No default on purpose: the window costs
+    ~$3 and should start when you choose, at a time when you will not be running Glue
+    jobs by hand (manual runs would collide with scheduled ones).
+
+    Apply at least 10 minutes before this time. The schedule opens 5 minutes earlier,
+    and AWS rejects start dates in the past.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:00:00Z$", var.measurement_window_start))
+    error_message = "measurement_window_start must be a UTC hour, like 2026-11-11T06:00:00Z."
+  }
+}
+
+variable "measurement_window_runs" {
+  description = "Number of hourly runs in the measurement window. 24 gives n=24 at ~$0.131 each (M-063), ~$3.14 total."
+  type        = number
+  default     = 24
+}
