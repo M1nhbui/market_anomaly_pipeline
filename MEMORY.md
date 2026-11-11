@@ -1071,3 +1071,27 @@ had an explanation, has disappeared: it belonged to the BTC-only sample.
 
 The sequence — hypothesis, rejected on thin evidence, revisited with more data — is
 the point. The September rejection was correct, and so is the revision.
+
+---
+
+## 2026-11-10 — Slice 8 designed before building
+
+The design for slice 8 was settled before writing any code. It went through a structured interview of 12 questions over three rounds, with each decision written down as it was made:
+
+- `GLOSSARY.md`, the project vocabulary
+- two ADRs in `docs/adr/`
+- a spec, GitHub issue #1, split into six linked tickets (#2–#7) with native "blocked by" links
+
+**The interview found a stale number before it could do damage.** The plan was to schedule the chain hourly at "$33/month" (M-020). Checking that against current measurements showed it came from August's 1-pair, 94-second runs. At 17 pairs, one run is Silver 308 s + Gold 133 s ≈ $0.108, so hourly forever would cost ≈ $78/month against a $10 budget (M-060).
+
+The design changed as a result (ADR-0002): one bounded window of 24 hourly runs to *measure* the hourly design, then a daily run permanently. The window switches itself off through a schedule end date, so the safety doesn't depend on anyone remembering. M-020's 12.0× multiple still stands, because it is a ratio of run counts. Only its dollar amounts were superseded.
+
+**Decisions and their reasons:**
+
+- **Step Functions** (ADR-0001), because only an orchestrator that branches on the gate Lambda's answer can actually stop Gold. Glue Workflows can't.
+- **Retry only transient errors.** Bug #16's concurrent-runs error is retried. A crashed Glue job is never retried, because that pays for the same crash again.
+- **Email only on problems.**
+- **A 26-hour lookback on every run**, because a daily run with the old 3-hour lookback would silently skip 21 hours.
+- **Gold stays a full rebuild** until measurements say otherwise (ticket #7).
+
+**Data delay was redefined to match an existing METRICS rule** (open question 3). It is the time from a bar's close until it is queryable in Gold, reported as a distribution. The first draft, "age of the newest bar", measured only the best case.
