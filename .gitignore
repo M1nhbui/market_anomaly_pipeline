@@ -210,3 +210,6 @@ derby.log
 
 # Cowork task exports (transcripts, email, account ID)
 Cowork task*.zip
+
+# Last Lambda test-invoke output (scratch)
+dq_response.json
