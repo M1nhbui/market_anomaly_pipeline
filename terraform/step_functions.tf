@@ -1,8 +1,10 @@
 # =============================================================================
 # Step Functions - the transform chain (slice 8, ADR-0001)
 #
-#   Silver Glue job  ->  DQ gate Lambda  ->  Choice(quality_passed)  ->  Gold Glue job
-#                                                  \-> GateBlocked (Fail)
+#   Defaults -> Config -> LookbackValid --(else)--> InvalidLookback (Fail)
+#     -> Silver Glue job -> DQ gate Lambda -> Choice(quality_passed) -> Gold Glue job
+#                                                  \-> AlertGateBlocked (SNS) -> GateBlocked (Fail)
+#   Any step that crashes or times out -> AlertStepFailed (SNS) -> RunFailed (Fail)
 #
 # The definition lives in state_machine/transform_chain.asl.json, not inline here,
 # so tests/test_state_machine.py can walk its paths offline and assert the promises
@@ -14,7 +16,8 @@
 # bills per state transition (~$0.025 per 1,000), so one run of ~5 transitions costs
 # about $0.0001, against ~$0.108 of Glue (M-060).
 #
-# Not scheduled yet. Runs are started by hand until ticket #5 adds the schedules.
+# Started by the EventBridge Scheduler schedules in transform_schedules.tf (ticket #5),
+# or by hand with an optional {"lookback_hours": N}.
 #
 # ALERTS (ticket #3): a blocked gate, or any step that crashes or times out, publishes
 # ONE email to the pipeline alert topic and ends the run as failed. Successes and

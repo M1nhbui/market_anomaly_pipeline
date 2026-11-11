@@ -8,6 +8,7 @@ A portfolio data-engineering project. It ingests Binance 1-minute bars for 17 pa
 - **Write code and tests locally first** (`./scripts/run_tests.sh`). The owner runs `terraform plan/apply`. Invoking a Lambda or running a Glue job also needs the owner's go-ahead in that session.
 - **The owner commits and pushes.** Don't run `git commit` or `git push`. When work is ready, give the owner a commit message (with `Closes #N` when it finishes a ticket) and the list of files to stage.
 - **Keep the owner oriented on tickets.** In every update about ticket work, include a short tracker of the current slice's tickets: number, what each one does in plain words, and its status (done / in progress / next / blocked).
+- **Tell the owner which Matt Pocock skill to type, at every stage and every trigger moment in `docs/agents/skill-flow.md`.** Most can only be started by the owner, so stop and say "type `/<skill> <args>` next" with one line on why. Don't do that stage by hand instead. Include the next skill in every update's ticket tracker.
 - **Measure, don't estimate.** Every number goes into `METRICS.md` as an `M-0xx` entry labelled MEASURED, DERIVED, EXTRAPOLATED or ESTIMATED. Never round up. Log the prediction before measuring, and record misses.
 - **`MEMORY.md` is append-only.** It is the chronological project story: add each event, decision and bug at the end. Never rewrite past entries; add a dated correction instead.
 - **Keep `CLAUDE.md` current.** Edit rules here when they change. History belongs in `MEMORY.md`.
