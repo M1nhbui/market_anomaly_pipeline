@@ -1095,3 +1095,15 @@ The design changed as a result (ADR-0002): one bounded window of 24 hourly runs 
 - **Gold stays a full rebuild** until measurements say otherwise (ticket #7).
 
 **Data delay was redefined to match an existing METRICS rule** (open question 3). It is the time from a bar's close until it is queryable in Gold, reported as a distribution. The first draft, "age of the newest bar", measured only the best case.
+
+---
+
+## 2026-11-11 — Ticket #2: the transform chain ran itself for the first time
+
+**The state machine is deployed.** `crypto-anomaly-transform-chain` runs Silver, then the gate, then Gold. The only way into Gold is the gate's Choice, on an explicit pass. The definition sits in its own file, and 9 offline tests walk its paths. To check that the tests catch mistakes, I broke the definition four ways: let a blocked gate reach Gold, dropped the wait-for-job, skipped the gate, started at the gate. Every break failed 1–3 tests.
+
+**Before the first run, the old lookback would have hidden a gap.** Silver was 31 hours stale, and the chain still passes Silver's old 3-hour default (the 26-hour lookback is ticket #4). A run would have rewritten only Nov 11 and left Nov 9's evening and all of Nov 10 missing. The gate would then have blocked it on row_count. This is ADR-0002's argument, demonstrated rather than predicted. A direct catch-up run with a 32-hour lookback fixed Silver first (453 s, Nov 9 and 10 complete at 24,480).
+
+**Bug #16 bit again in production.** The first execution started 18 s after the catch-up run reported SUCCEEDED, and Glue refused it with "concurrent runs exceeded". It failed in under a second at no cost. The retry worked. That error is exactly what ticket #3 retries, so the ticket now rests on a real failure instead of a hypothetical one.
+
+**The second attempt succeeded in 7.0 minutes** (M-061): Silver 178 s, gate 3.7 s (passed 8/8), Gold 157 s. The surprise is that **67 s of the 421 s is Step Functions noticing a finished Glue job late**: 47 s after Silver ended, 20 s after Gold ended. The run-and-wait integration checks the job on an interval, so part of every run is waiting to find out it is done. That matters for data delay (ticket #6) and should be in the predictions for the window.

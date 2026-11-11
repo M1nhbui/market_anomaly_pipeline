@@ -49,3 +49,8 @@ output "dq_gate_function_name" {
 output "dq_results_table" {
   value = "${aws_glue_catalog_database.gold.name}.${aws_glue_catalog_table.dq_results.name}"
 }
+
+output "transform_chain_arn" {
+  description = "Step Functions state machine for Silver -> gate -> Gold. Start a run with: aws stepfunctions start-execution --state-machine-arn <this>"
+  value       = aws_sfn_state_machine.transform_chain.arn
+}

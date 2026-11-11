@@ -1234,6 +1234,47 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   - Both durations are single runs; slice 8 adds a 26 h lookback, untested so far.
     The window's 24 runs replace this derivation with a measured distribution.
 
+### M-061 — First transform-chain run (ticket #2): succeeded in 7.0 min, gate passed
+- **Predictions (before any run):**
+  - **Silver catch-up** (direct Glue run, lookback 32 h, as_of ≈ 03:04): rewrites Nov 9,
+    10 and 11, reads Nov 8–11. Runtime **520–620 s** (comparable to 3-day backfill steps,
+    p50 575 s, M-054). Nov 9 and Nov 10 at exactly **24,480** bars each.
+  - **First state machine run** (Silver default 3 h lookback, so it targets Nov 11 only):
+    Silver **270–330 s**; gate **passes** (freshness 5–12 min, row_count ≥ 99%, 0 warnings);
+    Gold **130–160 s** (M-058's 133 s, with ~2 more days of Silver); whole execution
+    **7.0–8.5 min**, including the gap between a Glue job ending and Step Functions noticing.
+  - Main risk: a missing IAM permission for the run-and-wait Glue integration, which
+    would fail within seconds as AccessDenied, before any cost.
+- **Value:** execution `first-run-ticket-2-retry` **SUCCEEDED in 420.9 s (7.0 min)**,
+  03:12:48 → 03:19:49 UTC. Silver Glue **178 s** billed; gate **3.7 s**, passed 8/8, 0
+  warnings (freshness **4.69 min**, row_count **99.72%**, empty bars 1.26%, gaps 0.0%);
+  Gold Glue **157 s** billed, 30,703 events, newest 02:44 UTC.
+  Silver catch-up beforehand: **453 s**; Nov 9 and Nov 10 at exactly **24,480** bars each.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-11
+- **How:** `aws stepfunctions start-execution` / `get-execution-history` (state enter and
+  exit times); `aws glue get-job-run` (StartedOn, CompletedOn, ExecutionTime); gate rows
+  in `dq_results` by `run_id`.
+- **Predictions vs measured:**
+  - Catch-up runtime 520–620 s → 453 s: **missed** (faster). Bar counts 24,480 / 24,480: **hit**.
+  - Silver 270–330 s → 178 s: **missed** (faster). M-057's 308 s used the same 3 h
+    lookback but ran at 19:38, so it read ~1.8 days of Bronze; this run at 03:12 read
+    ~1.1 days. Plausibly input size, not measured.
+  - Gate passes: **hit**. Gold 130–160 s → 157 s: **hit**. Whole run 7.0–8.5 min → 7.01: **hit**, at the edge.
+  - IAM risk: **did not occur**. The first attempt was refused with
+    `Glue.ConcurrentRunsExceededException`, which is raised after authorisation.
+- **Notes:**
+  - **Bug #16 recurred in production.** The first attempt (`first-run-ticket-2`), started
+    18 s after the catch-up run reported SUCCEEDED, failed in under a second on
+    `ConcurrentRunsExceededException`, with no Glue cost. A retry ~40 s later worked. This
+    is direct evidence for ticket #3's retry on that error.
+  - **Step Functions notices a finished Glue job late.** Glue's CompletedOn → the state's
+    exit was **47 s** for Silver and **20 s** for Gold: **67 s of the 421 s (16%)** is
+    run-and-wait polling, not work. Glue queue time before execution was ~7 s per job.
+  - Glue cost of the run: (178 + 157) s × 2 DPU × $0.44/DPU-h = **$0.082**, below
+    M-060's $0.108, because this Silver run was faster.
+
+
 ---
 
 ## Open measurement-design questions

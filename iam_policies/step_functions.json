@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunAndWaitForTheTwoTransformJobsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "glue:StartJobRun",
+        "glue:GetJobRun",
+        "glue:GetJobRuns",
+        "glue:BatchStopJobRun"
+      ],
+      "Resource": [
+        "${silver_job_arn}",
+        "${gold_job_arn}"
+      ]
+    },
+    {
+      "Sid": "InvokeTheGateOnly",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "${gate_function_arn}",
+        "${gate_function_arn}:*"
+      ]
+    }
+  ]
+}

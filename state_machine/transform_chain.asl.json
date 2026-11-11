@@ -1,0 +1,70 @@
+{
+  "Comment": "Transform chain: Silver, then the gate, then Gold only if the gate passes. ADR-0001. Rendered by Terraform templatefile(); tested offline by tests/test_state_machine.py.",
+  "StartAt": "Silver",
+  "States": {
+    "Silver": {
+      "Comment": "Run the Bronze->Silver Glue job and wait for it to finish (.sync), so the gate never checks a half-written Silver.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${silver_job_name}"
+      },
+      "ResultSelector": {
+        "job_run_id.$": "$.Id",
+        "state.$": "$.JobRunState",
+        "execution_seconds.$": "$.ExecutionTime"
+      },
+      "ResultPath": "$.silver",
+      "Next": "Gate"
+    },
+    "Gate": {
+      "Comment": "Invoke the DQ gate. Keep only the fields the chain needs, under $.gate.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gate_function_arn}",
+        "Payload": {}
+      },
+      "ResultSelector": {
+        "quality_passed.$": "$.Payload.quality_passed",
+        "blocking_failures.$": "$.Payload.blocking_failures",
+        "warnings.$": "$.Payload.warnings",
+        "gate_run_id.$": "$.Payload.run_id"
+      },
+      "ResultPath": "$.gate",
+      "Next": "GatePassed"
+    },
+    "GatePassed": {
+      "Comment": "The only road into Gold. Anything other than an explicit pass is a block.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gate.quality_passed",
+          "BooleanEquals": true,
+          "Next": "Gold"
+        }
+      ],
+      "Default": "GateBlocked"
+    },
+    "Gold": {
+      "Comment": "Run the Silver->Gold Glue job (full rebuild) and wait for it to finish.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${gold_job_name}"
+      },
+      "ResultSelector": {
+        "job_run_id.$": "$.Id",
+        "state.$": "$.JobRunState",
+        "execution_seconds.$": "$.ExecutionTime"
+      },
+      "ResultPath": "$.gold",
+      "End": true
+    },
+    "GateBlocked": {
+      "Type": "Fail",
+      "Error": "GateBlocked",
+      "Cause": "The gate reported a blocking failure, so Gold was not built. See $.gate.blocking_failures in the execution history and gold/dq_results."
+    }
+  }
+}
