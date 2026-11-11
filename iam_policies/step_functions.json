@@ -25,6 +25,16 @@
         "${gate_function_arn}",
         "${gate_function_arn}:*"
       ]
+    },
+    {
+      "Sid": "PublishToThePipelineAlertTopicOnly",
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": [
+        "${alert_topic_arn}"
+      ]
     }
   ]
 }

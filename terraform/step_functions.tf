@@ -14,8 +14,11 @@
 # bills per state transition (~$0.025 per 1,000), so one run of ~5 transitions costs
 # about $0.0001, against ~$0.108 of Glue (M-060).
 #
-# Not scheduled yet. Runs are started by hand until ticket #5 adds the schedules;
-# alerts (#3) and the lookback input (#4) come first.
+# Not scheduled yet. Runs are started by hand until ticket #5 adds the schedules.
+#
+# ALERTS (ticket #3): a blocked gate, or any step that crashes or times out, publishes
+# ONE email to the pipeline alert topic and ends the run as failed. Successes and
+# warnings never email (ADR-0001). Only transient AWS errors are retried.
 # =============================================================================
 
 data "aws_iam_policy_document" "step_functions_trust" {
@@ -52,6 +55,7 @@ resource "aws_iam_role_policy" "step_functions" {
     silver_job_arn    = aws_glue_job.bronze_to_silver.arn
     gold_job_arn      = aws_glue_job.silver_to_gold.arn
     gate_function_arn = aws_lambda_function.dq_gate.arn
+    alert_topic_arn   = aws_sns_topic.pipeline_alerts.arn
   })
 }
 
@@ -64,9 +68,27 @@ resource "aws_sfn_state_machine" "transform_chain" {
     silver_job_name   = aws_glue_job.bronze_to_silver.name
     gold_job_name     = aws_glue_job.silver_to_gold.name
     gate_function_arn = aws_lambda_function.dq_gate.arn
+    alert_topic_arn   = aws_sns_topic.pipeline_alerts.arn
   })
 
   # The role's policy must exist before the first execution, or the first run fails
   # with an AccessDenied that looks like a definition bug.
   depends_on = [aws_iam_role_policy.step_functions]
+}
+
+# -----------------------------------------------------------------------------
+# Pipeline alerts
+# -----------------------------------------------------------------------------
+
+resource "aws_sns_topic" "pipeline_alerts" {
+  name = "${var.project_name}-pipeline-alerts"
+}
+
+# EMAIL SUBSCRIPTIONS START "PendingConfirmation". AWS sends a confirmation email and
+# delivers nothing until a human clicks the link in it - Terraform cannot click it.
+# Until then every alert is silently dropped, so confirming is part of the deploy.
+resource "aws_sns_topic_subscription" "pipeline_alerts_email" {
+  topic_arn = aws_sns_topic.pipeline_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
 }

@@ -1107,3 +1107,20 @@ The design changed as a result (ADR-0002): one bounded window of 24 hourly runs 
 **Bug #16 bit again in production.** The first execution started 18 s after the catch-up run reported SUCCEEDED, and Glue refused it with "concurrent runs exceeded". It failed in under a second at no cost. The retry worked. That error is exactly what ticket #3 retries, so the ticket now rests on a real failure instead of a hypothetical one.
 
 **The second attempt succeeded in 7.0 minutes** (M-061): Silver 178 s, gate 3.7 s (passed 8/8), Gold 157 s. The surprise is that **67 s of the 421 s is Step Functions noticing a finished Glue job late**: 47 s after Silver ended, 20 s after Gold ended. The run-and-wait integration checks the job on an interval, so part of every run is waiting to find out it is done. That matters for data delay (ticket #6) and should be in the predictions for the window.
+
+---
+
+## 2026-11-11 — Ticket #3: failures now email, and bug #16 is retried
+
+**What a run does when it goes wrong.** If the gate blocks a run, one email lists the blocking checks and gives a ready-to-paste Athena query for their observed values. If Silver, the gate or Gold crashes or times out, one email names the step and its error. Successes and warnings send nothing. The only retries are for transient AWS errors: Glue's "concurrent runs exceeded" (bug #16, which hit production during ticket #2) and Lambda service hiccups. They retry up to 3 times with growing waits. A real crash is never retried.
+
+**How it was proven.** 15 offline tests cover the rules. Five deliberate sabotages each broke at least one test:
+- removed the alert
+- let a Gold crash loop back into Gold
+- retried real failures
+- set 5 attempts
+- skipped the alert on a crash
+
+AWS's own definition validator accepted the result. Then TestState ran the deployed Choice and both alert states with made-up inputs, and **both emails arrived** (M-062). Nothing touched Silver or Gold.
+
+**A small departure, written down.** The ticket asked for observed values in the gate email, but the gate's response lists only check names, and this slice doesn't change the gate. The email carries the query that retrieves the values instead.

@@ -1275,6 +1275,24 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     M-060's $0.108, because this Silver run was faster.
 
 
+### M-062 — Failure path proven: both alert emails delivered (TestState drill)
+- **Value:** **2 of 2** alert paths delivered a real email: the gate-blocked alert, naming
+  `["freshness","row_count"]`, and the step-failed alert, naming Silver. The Choice routed
+  a failing gate answer to the alert, not to Gold. No Glue or gate run took place.
+- **Label:** MEASURED
+- **Measured on:** 2026-11-11 03:39 UTC
+- **How:** `aws stepfunctions test-state` on the deployed `GatePassed` Choice
+  (→ `AlertGateBlocked`), then on `AlertGateBlocked` and `AlertStepFailed` with the state
+  machine's own role and made-up inputs (gate run id `drill-2026-11-11-ticket-3`). SNS
+  returned MessageIds `2132f649…` and `a1b41f76…`; the owner confirmed both emails arrived.
+- **Notes:**
+  - Proves what offline tests can't: the IAM `sns:Publish` grant, the topic, the
+    confirmed email subscription, and the intrinsic-function message formatting.
+  - Cost: effectively $0 (two SNS publishes, two TestState calls).
+  - Not proven: a Catch firing on a *real* crash, and the retry absorbing a real
+    `ConcurrentRunsExceededException`. Both are wired and tested offline, and either one
+    will show up in execution history the first time it happens.
+
 ---
 
 ## Open measurement-design questions

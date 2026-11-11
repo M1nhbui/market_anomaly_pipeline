@@ -25,10 +25,24 @@ TEMPLATE_VARS = {
     "silver_job_name": "test-bronze-to-silver",
     "gold_job_name": "test-silver-to-gold",
     "gate_function_arn": "arn:aws:lambda:us-east-1:000000000000:function:test-dq-gate",
+    "alert_topic_arn": "arn:aws:sns:us-east-1:000000000000:test-alerts",
 }
 
 GLUE_RUN_AND_WAIT = "arn:aws:states:::glue:startJobRun.sync"
 LAMBDA_INVOKE = "arn:aws:states:::lambda:invoke"
+SNS_PUBLISH = "arn:aws:states:::sns:publish"
+
+# The only errors worth retrying: AWS bookkeeping that succeeds on a second try.
+# A Glue job that genuinely FAILED, or a gate that raised, is deterministic - a retry
+# pays for the same crash again (ADR-0001).
+TRANSIENT_GLUE = {"Glue.ConcurrentRunsExceededException"}
+TRANSIENT_LAMBDA = {
+    "Lambda.TooManyRequestsException",
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+}
+MAX_ATTEMPTS = 3
 
 
 def render(text, variables):
@@ -182,3 +196,82 @@ def test_a_blocked_gate_ends_the_run_as_failed_without_gold(sm):
     ends = [n for n in after_block if sm["States"][n]["Type"] in ("Fail", "Succeed") or sm["States"][n].get("End")]
     assert ends and all(sm["States"][n]["Type"] == "Fail" for n in ends), \
         "a run the gate blocked must show as failed in the console, not succeeded"
+    assert any(is_alert(sm["States"][n]) for n in after_block), \
+        "a run the gate blocked must email before it fails"
+
+
+# --- alerts and retries (ticket #3) -------------------------------------------------
+
+
+def is_alert(state):
+    return state.get("Resource") == SNS_PUBLISH
+
+
+def work_states(sm):
+    """Task states that do pipeline work: the two Glue jobs and the gate."""
+    return [n for n, s in sm["States"].items() if s["Type"] == "Task" and not is_alert(s)]
+
+
+def happy_roads(state):
+    """Roads a run takes when nothing goes wrong: Next, and Choice rules (not Default)."""
+    roads = [state["Next"]] if "Next" in state else []
+    roads += [r["Next"] for r in state.get("Choices", [])]
+    return roads
+
+
+def test_every_work_step_catches_every_error(sm):
+    for name in work_states(sm):
+        catchers = sm["States"][name].get("Catch", [])
+        assert any("States.ALL" in c["ErrorEquals"] for c in catchers), \
+            f"{name} has no catch-all: a crash there would end the run with no email"
+
+
+def test_every_failure_road_emails_then_fails_without_reaching_gold(sm):
+    gold = glue_state(sm, TEMPLATE_VARS["gold_job_name"])
+    for name in work_states(sm):
+        for catcher in sm["States"][name].get("Catch", []):
+            after = reachable(sm, start=catcher["Next"])
+            assert gold not in after, f"a failure in {name} must never lead to Gold"
+            assert any(is_alert(sm["States"][n]) for n in after), f"a failure in {name} must email"
+            ends = [n for n in after if sm["States"][n]["Type"] in ("Fail", "Succeed") or sm["States"][n].get("End")]
+            assert ends and all(sm["States"][n]["Type"] == "Fail" for n in ends), \
+                f"a failure in {name} must end the run as failed"
+
+
+def test_a_successful_run_sends_no_email(sm):
+    seen, todo = {sm["StartAt"]}, [sm["StartAt"]]
+    while todo:
+        for target in happy_roads(sm["States"][todo.pop()]):
+            if target not in seen:
+                seen.add(target)
+                todo.append(target)
+    assert not [n for n in seen if is_alert(sm["States"][n])], \
+        "success and warnings must not email (ADR-0001)"
+
+
+def test_only_transient_errors_are_retried_and_at_most_three_times(sm):
+    for name in work_states(sm):
+        state = sm["States"][name]
+        allowed = TRANSIENT_GLUE if state["Resource"] == GLUE_RUN_AND_WAIT else TRANSIENT_LAMBDA
+        for retrier in state.get("Retry", []):
+            assert set(retrier["ErrorEquals"]) <= allowed, \
+                f"{name} retries {retrier['ErrorEquals']}; only {sorted(allowed)} may be retried"
+            assert retrier["MaxAttempts"] <= MAX_ATTEMPTS
+            assert retrier.get("BackoffRate", 1.0) > 1.0, "retries should back off"
+
+
+def test_the_transient_errors_actually_are_retried(sm):
+    # The other half of the rule: bug #16 recurred on 2026-11-11 (M-061). A schedule
+    # that starts right after any manual Glue run must ride it out, not email.
+    for name in work_states(sm):
+        state = sm["States"][name]
+        wanted = TRANSIENT_GLUE if state["Resource"] == GLUE_RUN_AND_WAIT else TRANSIENT_LAMBDA
+        retried = {e for r in state.get("Retry", []) for e in r["ErrorEquals"]}
+        assert wanted <= retried, f"{name} does not retry {sorted(wanted - retried)}"
+
+
+def test_alerts_publish_to_the_configured_topic(sm):
+    alerts = [s for s in sm["States"].values() if is_alert(s)]
+    assert alerts
+    for a in alerts:
+        assert a["Parameters"]["TopicArn"] == TEMPLATE_VARS["alert_topic_arn"]

@@ -54,3 +54,8 @@ output "transform_chain_arn" {
   description = "Step Functions state machine for Silver -> gate -> Gold. Start a run with: aws stepfunctions start-execution --state-machine-arn <this>"
   value       = aws_sfn_state_machine.transform_chain.arn
 }
+
+output "pipeline_alerts_topic_arn" {
+  description = "SNS topic the transform chain emails on a blocked gate or a failed step."
+  value       = aws_sns_topic.pipeline_alerts.arn
+}

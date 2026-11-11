@@ -1,5 +1,5 @@
 {
-  "Comment": "Transform chain: Silver, then the gate, then Gold only if the gate passes. ADR-0001. Rendered by Terraform templatefile(); tested offline by tests/test_state_machine.py.",
+  "Comment": "Transform chain: Silver, then the gate, then Gold only if the gate passes. Emails only on a blocked gate or a crashed step. ADR-0001. Rendered by Terraform templatefile(); tested offline by tests/test_state_machine.py.",
   "StartAt": "Silver",
   "States": {
     "Silver": {
@@ -15,6 +15,22 @@
         "execution_seconds.$": "$.ExecutionTime"
       },
       "ResultPath": "$.silver",
+      "Retry": [
+        {
+          "Comment": "Bug #16: Glue reports a run finished seconds before it frees the job's single run slot. Seen in production on 2026-11-11 (M-061).",
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "SilverFailed"
+        }
+      ],
       "Next": "Gate"
     },
     "Gate": {
@@ -32,6 +48,27 @@
         "gate_run_id.$": "$.Payload.run_id"
       },
       "ResultPath": "$.gate",
+      "Retry": [
+        {
+          "Comment": "Lambda service hiccups only. A gate that raised (e.g. an Athena timeout) is caught below and emailed, not retried.",
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "GateFailed"
+        }
+      ],
       "Next": "GatePassed"
     },
     "GatePassed": {
@@ -44,7 +81,7 @@
           "Next": "Gold"
         }
       ],
-      "Default": "GateBlocked"
+      "Default": "AlertGateBlocked"
     },
     "Gold": {
       "Comment": "Run the Silver->Gold Glue job (full rebuild) and wait for it to finish.",
@@ -59,12 +96,76 @@
         "execution_seconds.$": "$.ExecutionTime"
       },
       "ResultPath": "$.gold",
+      "Retry": [
+        {
+          "Comment": "Bug #16, as for Silver.",
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "GoldFailed"
+        }
+      ],
       "End": true
+    },
+    "SilverFailed": {
+      "Comment": "Record which step failed, so the email can name it.",
+      "Type": "Pass",
+      "Result": "Silver (Bronze->Silver Glue job)",
+      "ResultPath": "$.failed_step",
+      "Next": "AlertStepFailed"
+    },
+    "GateFailed": {
+      "Type": "Pass",
+      "Result": "Gate (DQ gate Lambda)",
+      "ResultPath": "$.failed_step",
+      "Next": "AlertStepFailed"
+    },
+    "GoldFailed": {
+      "Type": "Pass",
+      "Result": "Gold (Silver->Gold Glue job)",
+      "ResultPath": "$.failed_step",
+      "Next": "AlertStepFailed"
+    },
+    "AlertGateBlocked": {
+      "Comment": "One email naming the blocking checks. Observed values live in gold/dq_results under the gate run id.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${alert_topic_arn}",
+        "Subject": "[crypto-anomaly] Gate blocked the run - Gold not built",
+        "Message.$": "States.Format('The DQ gate reported blocking failures, so Gold was not rebuilt.\n\nBlocking checks: {}\nWarnings: {}\n\nExecution: {}\nGate run id: {}\n\nObserved values for this run (Athena):\nSELECT check_name, passed, observed, threshold FROM crypto_anomaly_gold.dq_results WHERE run_id = \\'{}\\'', States.JsonToString($.gate.blocking_failures), States.JsonToString($.gate.warnings), $$.Execution.Name, $.gate.gate_run_id, $.gate.gate_run_id)"
+      },
+      "ResultPath": null,
+      "Next": "GateBlocked"
+    },
+    "AlertStepFailed": {
+      "Comment": "One email naming the step that crashed or timed out, with its error.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${alert_topic_arn}",
+        "Subject": "[crypto-anomaly] Transform run failed",
+        "Message.$": "States.Format('A step in the transform chain failed and was not retried.\n\nFailed step: {}\nError: {}\nCause: {}\n\nExecution: {}', $.failed_step, $.error.Error, $.error.Cause, $$.Execution.Name)"
+      },
+      "ResultPath": null,
+      "Next": "RunFailed"
     },
     "GateBlocked": {
       "Type": "Fail",
       "Error": "GateBlocked",
       "Cause": "The gate reported a blocking failure, so Gold was not built. See $.gate.blocking_failures in the execution history and gold/dq_results."
+    },
+    "RunFailed": {
+      "Type": "Fail",
+      "Error": "StepFailed",
+      "Cause": "A step failed and was not retried. The alert email names the step and its error."
     }
   }
 }
