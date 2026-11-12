@@ -1225,3 +1225,15 @@ The hourly window schedule, its two variables and its output were deleted once t
 - The baseline query wasn't recorded.
 
 Three were declined with reasons: an HCL-parsing test, dead-letter-queue metrics nobody uses, and an unrelated file.
+
+---
+
+## 2026-11-12 — Ticket #11: a fractional lookback is refused before it costs anything
+
+**The bug.** The guard admitted any number from 1 to 72, but Silver parses `--lookback-hours` with `int()`. A manual run with 36.5 would pass the guard, start a billed Glue job, crash, and send a failure email.
+
+**The trick.** Step Functions' Choice state has no "is integer" test. The chain already turns the lookback into text with `States.Format` to pass it to Glue, so a new `LookbackText` state renders that exact text first, and the guard also requires it to contain no `.`. TestState showed every non-whole form renders with one, even `1e1` → "10.0". So the check validates the very string Silver will parse, which a numeric test could never do.
+
+**Proof.** An offline test pins the condition, the shared expression and the ordering; three sabotages each fail it. TestState was run on 18 inputs, including objects, arrays, null and booleans, and none crashes the render. That matters because a crash there would be an uncatchable `States.Runtime` that trips the #9 email. A live run with 36.5 stopped at `InvalidLookback` in 0.048 s, with no Glue job and no email (M-069).
+
+**Review.** No blocking findings. Small fixes: a shared `silver_guard()` test helper, glossary wording ("Glue job run", since **Run** means the whole chain), and an honest note that only 3 of the TestState inputs had predictions written down beforehand.

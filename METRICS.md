@@ -1527,9 +1527,14 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
 - **Offline:** `test_a_fractional_lookback_stops_before_any_work`. Three sabotages each made
   it fail: wrong pattern, text rendered differently from Silver's argument, guard reachable
   without the render.
-- **Live test:** _pending (after apply, with the owner's go-ahead): one execution with
-  `{"lookback_hours": 36.5}`, expected to stop at `InvalidLookback` in under 1 s with no Glue
-  job run and no email (the #9 rule skips `InvalidLookback`)._
+- **Live test (MEASURED, 2026-11-12 21:23 UTC, owner's go-ahead):** execution
+  `ticket11-fraction-proof-20261112T212345`, input `{"lookback_hours": 36.5}`. **FAILED with
+  `InvalidLookback` in 0.048 s ✅** (21:23:47.021 → 21:23:47.069). Path: Defaults → Config →
+  LookbackText → LookbackValid → InvalidLookback. No Task state was entered, so no Glue job run,
+  no gate and $0. **No email ✅:** for 21:20–21:40 UTC the run-failed rule has no
+  `TriggeredRules`/`Invocations` data and the topic has no `NumberOfMessagesPublished`. In the #9
+  and #10 tests these metrics appeared within ~1 min. Prediction ("under 1 s, no Glue job run, no
+  email") held.
 
 ---
 
