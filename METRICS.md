@@ -1463,7 +1463,19 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   errors. A sabotage (dropping `InvalidLookback`) made it fail.
 - **The trigger works as expected (MEASURED, TestState, 2026-11-12):** `States.JsonMerge` with a
   non-object argument → `States.Runtime`, "Invalid arguments in States.JsonMerge".
-- **Live test:** _pending (after apply, with the owner's go-ahead)._
+- **Live test (MEASURED, 2026-11-12, owner's go-ahead):**
+  - Execution `ticket9-runtime-proof-20261112T085734`, input `[1]`: **FAILED in under 1 s at the
+    first state, `Defaults`**, with **`States.ReferencePathConflict`** ("Unable to apply step
+    "defaults" to input [1]"). History: ExecutionStarted → PassStateEntered → ExecutionFailed.
+    No Glue job, no Lambda, cost $0.
+  - **Prediction miss, kept:** I predicted `States.Runtime` at the merge (`Config`). The run
+    failed one state earlier with a different uncatchable error. The rule still matched, because
+    it emails on any error name the chain didn't raise itself. This is exactly the case the
+    "unseen error" pattern check (`Something.New`) was there for.
+  - TestState of `AlertGateBlocked` with the chain's own role, under the new topic policy:
+    **SUCCEEDED**, so the chain can still publish.
+  - **CloudWatch, 08:50–09:30 UTC:** rule `Invocations` 1, `FailedInvocations` none; SNS
+    `NumberOfMessagesPublished` 2, `NumberOfNotificationsDelivered` 2. **One email per path ✅.**
 
 ---
 

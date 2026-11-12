@@ -1191,3 +1191,18 @@ The hourly window schedule, its two variables and its output were deleted once t
 **Two review catches:**
 - A daily-cost figure was rounded up ($4.48 → $4.47).
 - Cost numbers were copied into both the ADR and the Terraform header. The header now points to ADR-0002 instead, so the numbers live in one place.
+
+---
+
+## 2026-11-12 — Ticket #9: failures the chain can't catch now email too
+
+**The gap.** `States.ALL` doesn't catch `States.Runtime`, and timed-out or aborted runs never reach the chain's alert states. Those runs failed silently.
+
+**The decision.** The owner picked "filter duplicates" over two alternatives: making EventBridge the only alert path, or accepting double emails. An EventBridge rule watches the chain's status events. It emails on TIMED_OUT, ABORTED, or FAILED with any error the chain didn't raise itself, and skips GateBlocked/StepFailed (already emailed) and InvalidLookback (silent by design). A test keeps that skip-list equal to the chain's Fail errors. The email omits Glue's raw cause, because EventBridge doesn't escape values. Recorded in ADR-0001.
+
+**The proof (M-067).**
+- AWS's matcher passed 10/10 sample events.
+- Live, a run started with input `[1]` failed in under a second with no Glue cost, and exactly one email went out.
+- A dry run of the gate-blocked alert proved the topic-policy swap didn't break the chain's own email.
+
+**The prediction missed in an instructive way.** I expected `States.Runtime`; the run died one state earlier with `States.ReferencePathConflict`. A rule that listed only `States.Runtime` would have stayed silent. Because the rule matches "anything the chain didn't raise", it caught an error name nobody had predicted.
