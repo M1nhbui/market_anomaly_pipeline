@@ -17,10 +17,19 @@
       "Parameters": {
         "config.$": "States.JsonMerge($.defaults, $$.Execution.Input, false)"
       },
+      "Next": "LookbackText"
+    },
+    "LookbackText": {
+      "Comment": "Ticket #11: render the lookback exactly as Silver will receive it (Glue arguments are strings). The guard checks this text, because Choice has no 'is integer' test and Silver parses it with int(): any non-whole value renders with a '.' (36.5, 40.0, and 1e1 -> 10.0; M-069).",
+      "Type": "Pass",
+      "Parameters": {
+        "silver_arg.$": "States.Format('{}', $.config.lookback_hours)"
+      },
+      "ResultPath": "$.lookback",
       "Next": "LookbackValid"
     },
     "LookbackValid": {
-      "Comment": "0 means FULL REPROCESS to the Silver job, which would blow the 25-minute timeout at today's size. Gaps longer than 3 days go through scripts/backfill_silver.sh.",
+      "Comment": "A whole number from 1 to 72. 0 means FULL REPROCESS to the Silver job, which would blow the 25-minute timeout at today's size; gaps longer than 3 days go through scripts/backfill_silver.sh. A fraction would crash Silver's int() parse after Glue starts billing (ticket #11).",
       "Type": "Choice",
       "Choices": [
         {
@@ -36,6 +45,12 @@
             {
               "Variable": "$.config.lookback_hours",
               "NumericLessThanEquals": 72
+            },
+            {
+              "Not": {
+                "Variable": "$.lookback.silver_arg",
+                "StringMatches": "*.*"
+              }
             }
           ],
           "Next": "Silver"
@@ -224,7 +239,7 @@
     "InvalidLookback": {
       "Type": "Fail",
       "Error": "InvalidLookback",
-      "Cause": "lookback_hours must be a number from 1 to 72. Nothing ran. For longer gaps use scripts/backfill_silver.sh."
+      "Cause": "lookback_hours must be a whole number from 1 to 72. Nothing ran. For longer gaps use scripts/backfill_silver.sh."
     }
   }
 }

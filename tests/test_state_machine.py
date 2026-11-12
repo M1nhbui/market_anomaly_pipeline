@@ -299,6 +299,18 @@ def silver_lookback_path(sm):
     return m.group(1)
 
 
+def silver_guard(sm):
+    """The one Choice that admits a run into Silver: (name, state, the admitting rule)."""
+    silver = glue_state(sm, TEMPLATE_VARS["silver_job_name"])
+    guards = [
+        (n, s) for n, s in sm["States"].items()
+        if s["Type"] == "Choice" and any(r["Next"] == silver for r in s["Choices"])
+    ]
+    assert len(guards) == 1, "exactly one Choice should admit a run into Silver"
+    name, guard = guards[0]
+    return name, guard, next(r for r in guard["Choices"] if r["Next"] == silver)
+
+
 def test_silver_receives_the_lookback_from_the_run_config(sm):
     assert silver_lookback_path(sm) == "$.config.lookback_hours"
 
@@ -321,18 +333,38 @@ def test_the_run_input_overrides_the_default(sm):
 def test_an_out_of_range_lookback_stops_before_any_work(sm):
     # 0 means FULL REPROCESS to the Silver job, which at today's size would blow the
     # 25-minute timeout; multi-day gaps belong to scripts/backfill_silver.sh.
-    silver = glue_state(sm, TEMPLATE_VARS["silver_job_name"])
-    guards = [
-        (n, s) for n, s in sm["States"].items()
-        if s["Type"] == "Choice" and any(r["Next"] == silver for r in s["Choices"])
-    ]
-    assert len(guards) == 1, "exactly one Choice should admit a run into Silver"
-    name, guard = guards[0]
-    rule = next(r for r in guard["Choices"] if r["Next"] == silver)
-    conds = {(c["Variable"], k, v) for c in rule["And"] for k, v in c.items() if k != "Variable"}
+    _, guard, rule = silver_guard(sm)
+    conds = {(c["Variable"], k, v) for c in rule["And"] if "Variable" in c
+             for k, v in c.items() if k != "Variable"}
     assert ("$.config.lookback_hours", "IsNumeric", True) in conds
     assert ("$.config.lookback_hours", "NumericGreaterThanEquals", MIN_LOOKBACK_HOURS) in conds
     assert ("$.config.lookback_hours", "NumericLessThanEquals", MAX_LOOKBACK_HOURS) in conds
     rejected = reachable(sm, start=guard["Default"])
     assert all(sm["States"][n]["Type"] == "Fail" for n in rejected), \
         "a rejected lookback must fail immediately: no Glue, no gate, no email"
+
+
+def test_a_fractional_lookback_stops_before_any_work(sm):
+    # Ticket #11. Silver parses --lookback-hours with argparse type=int, so "36.5"
+    # passes a range check and then crashes a billed Silver job run. Choice rules have no
+    # "is integer" test, so the guard checks the TEXT Silver would receive: the same
+    # States.Format expression, rendered first. TestState (M-069) shows every non-whole
+    # form renders with a '.': 36.5 -> "36.5", 40.0 -> "40.0", 1e1 -> "10.0".
+    silver = glue_state(sm, TEMPLATE_VARS["silver_job_name"])
+    silver_expr = sm["States"][silver]["Parameters"]["Arguments"]["--lookback-hours.$"]
+    # Every value a Pass state writes: output path -> (state, expression).
+    renders = {
+        f'{s["ResultPath"]}.{key.removesuffix(".$")}': (name, expr)
+        for name, s in sm["States"].items() if s["Type"] == "Pass" and "ResultPath" in s
+        for key, expr in s.get("Parameters", {}).items() if key.endswith(".$")
+    }
+    guard_name, _, rule = silver_guard(sm)
+    whole = [c["Not"] for c in rule["And"] if "Not" in c and "StringMatches" in c["Not"]]
+    assert len(whole) == 1 and whole[0]["StringMatches"] == "*.*", \
+        "the rule into Silver must also require the rendered lookback to contain no '.'"
+    checked = whole[0]["Variable"]
+    assert checked in renders and renders[checked][1] == silver_expr, \
+        "the checked text must be rendered by the exact expression Silver receives"
+    renderer = renders[checked][0]
+    assert guard_name not in reachable(sm, without={renderer}), \
+        "every road to the guard must pass through the state that renders the text"

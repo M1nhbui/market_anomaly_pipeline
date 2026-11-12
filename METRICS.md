@@ -1505,6 +1505,32 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     it were left in ALARM a real drop would send nothing. The reset sends no email, because
     there is no OK action.
 
+### M-069 — Whole-number lookback guard (ticket #11): TestState before deploy
+- **Expected behaviour (ticket #11's acceptance criteria, written before this work):**
+  `{"lookback_hours": 36.5}` stops at `InvalidLookback` with no Glue job run; `{}` (26) and `40`
+  still reach Silver. These three were the only predictions; the other inputs below were
+  exploratory edge cases, chosen to find any form a fraction could take.
+- **How Step Functions renders numbers (MEASURED, TestState, `States.Format('{}', $.x)`,
+  2026-11-12):** `26` → "26", `40` → "40", `72` → "72", `40.0` → "40.0", `36.5` → "36.5",
+  `0.5` → "0.5", `1e1` → "10.0", `1E1` → "10.0", `26.000` → "26.0". **Every non-whole form
+  renders with a '.'**, so "contains no '.'" on the text Silver receives is an exact
+  whole-number test.
+- **The new render + guard states against AWS (MEASURED, TestState, 11 inputs):** `26`, `40`,
+  `72`, `1` → Silver. `36.5`, `40.0`, `1e1`, `0`, `73`, `"abc"`, `"26"` (a string) →
+  `InvalidLookback`. The 3 predicted cases matched, and the 8 exploratory cases all went
+  where the design intends. `validate-state-machine-definition`: OK.
+- **Odd manual inputs can't crash the render (MEASURED, TestState, after review):** `{"a":1}` →
+  "{a=1}", `[1]`, `null`, `true`, `-5`, `7.2e1` → "72.0", `1e30` → "1.0E30" all render without
+  error and stop at `InvalidLookback`. No input reaches an uncatchable `States.Runtime` before
+  the guard, so a bad manual input ends quietly instead of tripping the #9 failure email.
+  `7.2e1` is rejected even though it equals 72; Silver's `int("72.0")` would crash on it too.
+- **Offline:** `test_a_fractional_lookback_stops_before_any_work`. Three sabotages each made
+  it fail: wrong pattern, text rendered differently from Silver's argument, guard reachable
+  without the render.
+- **Live test:** _pending (after apply, with the owner's go-ahead): one execution with
+  `{"lookback_hours": 36.5}`, expected to stop at `InvalidLookback` in under 1 s with no Glue
+  job run and no email (the #9 rule skips `InvalidLookback`)._
+
 ---
 
 ## Open measurement-design questions
