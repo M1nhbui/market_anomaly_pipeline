@@ -1351,7 +1351,70 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   - **Retries:** **0** ConcurrentRunsExceeded retries. Runs are ~49 min apart, so the
     Glue slots are always free.
   - **Polling lag:** 20–55 s per Glue step, as in M-061 and M-063.
-- **Measured:** _pending (ticket #6)_
+- **Measured** (2026-11-12, `scripts/measure_window.py 2026-11-11T06:00:00Z 24`, MEASURED from
+  Step Functions history, Glue `get-job-run` and `dq_results`; cost DERIVED):
+  - **Invocations: 24 ✅.** 24 executions, all input `{}`, last started 2026-11-12 05:00:18 UTC,
+    none after. Every run started **18.1–19.5 s** after the hour. The first daily run
+    (2026-11-13 00:30 UTC) is still to be confirmed.
+  - **Outcome: 24/24 SUCCEEDED**, 0 blocked, 0 failed. **0 retries ✅** (no TaskFailed events).
+  - **Gate pass rate: 24/24 ✅.** 192/192 checks passed, **0 warnings**.
+  - **Run duration: p50 701.9 s (11.69 min) ❌**, range **554.2–829.6 s (9.23–13.82 min) ❌**.
+    Predicted p50 11 min, range 10–13: p50 missed by 0.69 min, and 4/24 runs fell outside the range.
+  - **Silver billed: p50 425.5 s, range 349–504 s ❌** (predicted 330–420; 16/24 above 420). **The
+    hour-of-day trend did show ✅**, though small against the noise. Medians by Silver read time:
+    06–11 UTC 387.5 s, 18–23 UTC 436.5 s, then 00–05 UTC 395.5 s once a new UTC day starts.
+  - **Gold billed: p50 175 s, range 117–279 s ❌** (predicted 175–200; 7/24 inside). **No creep**:
+    the first 12 runs had a median of 173 s and the last 12 had 176 s, against a run-to-run range of 117–279 s. This supersedes M-063's "creeping up", which was read from 3 runs. Raw input for ticket #7.
+  - **Freshness at gate: 6.30–12.24 min ❌** (predicted 8–12), all under the 15 min limit. In 22/24
+    runs Silver's newest bar was :57, because the bars for :58 and :59 had not reached Bronze yet.
+  - **Data delay** (`data_delays()`, unit-tested): 1,380 values, one per minute, from runs 2–24
+    (each stands for that minute's bar in all 17 pairs; run 1's predecessor is outside the window). A bar counts as queryable at its run's Glue Gold
+    `CompletedOn`. **p50 2,551.4 s (42.52 min) ✅**, **max 4,490.5 s (74.84 min) ✅**, min
+    487.7 s (8.12 min, context only). The newest bar comes from the gate's freshness check,
+    which is the newest bar across all pairs. The per-pair figures equal these only if every pair's
+    newest bar matches it. Row counts of 99%+ at every gate (`row_count` check) support this, but
+    it was not checked pair by pair.
+  - **Cost per run: p50 $0.1493, range $0.1263–$0.1757 ❌** (predicted $0.12–0.14; 6/24
+    inside). **Window total $3.5126 ❌** (predicted $2.9–3.4). Glue only, from billed `ExecutionTime` ×
+    2 DPU × $0.44. S3 request charges were not in the prediction: Cost Explorer shows S3 at
+    $0.495 on 2026-11-11 against a $0.026/day baseline.
+  - **Polling lag: p50 34.3 s, range 1.0–56.6 s over 48 steps ❌** (predicted 20–55). Now measured as
+    Step Functions state exit − Glue `CompletedOn`, which is more exact than M-061/M-063's
+    "state duration − billed seconds".
+  - **Glue minimum billing (OQ 1):** the AWS Glue pricing page (read 2026-11-12) says ETL jobs are
+    "billed by the second". It **does not state a minimum for Spark ETL** jobs; the only minimum
+    it states is "1 minute minimum billing duration" for Data Quality tasks. Whether an unstated
+    1-minute minimum applies is not confirmed. Both jobs are Glue 5.0, G.1X × 2. The shortest billed step was
+    117 s, so a minimum of up to 1 minute would not change any figure here.
+  - **Cost Explorer confirmation:** _pending (the window's days are still landing)._
+  - **Per run:**
+
+  | # | start (UTC) | duration s | Silver billed s | Gold billed s | cost $ | freshness min |
+  |---|---|---|---|---|---|---|
+  | 1 | 11-11 06:00 | 681.2 | 393 | 218 | 0.1493 | 10.48 |
+  | 2 | 11-11 07:00 | 640.5 | 366 | 162 | 0.1290 | 10.19 |
+  | 3 | 11-11 08:00 | 554.1 | 399 | 118 | 0.1263 | 10.37 |
+  | 4 | 11-11 09:00 | 648.2 | 382 | 181 | 0.1376 | 10.18 |
+  | 5 | 11-11 10:00 | 676.2 | 376 | 237 | 0.1498 | 10.37 |
+  | 6 | 11-11 11:00 | 769.3 | 455 | 176 | 0.1542 | 12.01 |
+  | 7 | 11-11 12:00 | 829.6 | 428 | 219 | 0.1581 | 11.18 |
+  | 8 | 11-11 13:00 | 780.5 | 473 | 170 | 0.1571 | 12.24 |
+  | 9 | 11-11 14:00 | 726.6 | 429 | 182 | 0.1493 | 11.5 |
+  | 10 | 11-11 15:00 | 651.5 | 504 | 117 | 0.1518 | 7.04 |
+  | 11 | 11-11 16:00 | 718.4 | 422 | 160 | 0.1422 | 11.42 |
+  | 12 | 11-11 17:00 | 649.1 | 426 | 150 | 0.1408 | 11.3 |
+  | 13 | 11-11 18:00 | 677.0 | 422 | 151 | 0.1400 | 11.45 |
+  | 14 | 11-11 19:00 | 723.4 | 465 | 152 | 0.1508 | 12.17 |
+  | 15 | 11-11 20:00 | 717.5 | 434 | 192 | 0.1530 | 11.12 |
+  | 16 | 11-11 21:00 | 711.4 | 421 | 174 | 0.1454 | 11.28 |
+  | 17 | 11-11 22:00 | 692.3 | 439 | 152 | 0.1444 | 11.5 |
+  | 18 | 11-11 23:00 | 770.6 | 458 | 186 | 0.1574 | 12.02 |
+  | 19 | 11-12 00:00 | 784.5 | 440 | 279 | 0.1757 | 11.31 |
+  | 20 | 11-12 01:00 | 714.6 | 469 | 170 | 0.1562 | 12.16 |
+  | 21 | 11-12 02:00 | 648.4 | 351 | 178 | 0.1293 | 10.15 |
+  | 22 | 11-12 03:00 | 776.4 | 425 | 202 | 0.1532 | 6.3 |
+  | 23 | 11-12 04:00 | 659.1 | 349 | 170 | 0.1268 | 10.2 |
+  | 24 | 11-12 05:00 | 652.2 | 366 | 182 | 0.1339 | 10.15 |
 
 ### M-065 — First scheduled run (ticket #5): fired on time, succeeded in 11.35 min
 - **Run:** execution `736af404-60f8-4c92-9237-57f1b74cdec2`, started by the hourly
@@ -1364,13 +1427,26 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   - Gate step 5.59 s; **passed**, no blocking failures, no warnings
     (gate run `9187c40a-de60-4107-a0a7-10e64bc782d4`).
   - Gold step 245.58 s, of which Glue billed `ExecutionTime` **218 s**; polling lag 28 s.
-- **Cost (DERIVED):** (393 + 218) s × 2 DPU × $0.44/DPU-h = **$0.1494**.
+- **Cost (DERIVED):** (393 + 218) s × 2 DPU × $0.44/DPU-h = **$0.1493**.
 - **Against M-064 (one run, not the window's verdict):** duration inside 10–13 min; Silver
   inside 330–420 s; polling lag inside 20–55 s; gate passed. **Gold 218 s is above the
-  175–200 s prediction, and the cost $0.1494 is above the $0.12–0.14 range** — both misses
+  175–200 s prediction, and the cost $0.1493 is above the $0.12–0.14 range** — both misses
   on the first run, recorded as such. The window total (ticket #6) decides the verdict.
 - **Schedule state after the run:** hourly schedule ENABLED, window 2026-11-11 05:55 UTC →
   2026-11-12 05:30 UTC, so 23 fires remain.
+
+### M-066 — November budget: forecast alert fired; overrun accepted
+- **AWS Budgets, read 2026-11-12 03:27 UTC (MEASURED):** actual month-to-date **$7.185**;
+  AWS forecast **$45.934** against the $10 budget, so the FORECASTED > 100% notification fired.
+  The ACTUAL > 80% notification had not fired yet.
+- **Cost Explorer by service, Nov 1–11 (MEASURED, lags ~1 day):** Glue $5.542, S3 $1.597,
+  Cost Explorer API $0.040, Athena $0.006. The two big days were Nov 9 ($3.898, the backfill)
+  and Nov 11 ($3.033 so far, the window).
+- **AWS's forecast is a straight-line extrapolation** of those two days. It assumes hourly runs
+  continue all month, and they don't.
+- **November total ≈ $12–13 (ESTIMATED):** about $9.1 by the end of Nov 12, plus 18 daily runs at
+  ~$0.17 and S3 storage. The owner chose to accept the overrun rather than delay the daily
+  schedule to Dec 1 (≈ $9.6).
 
 ---
 
@@ -1384,6 +1460,8 @@ Resolved as we reach each stage. Recorded here so the reasoning is visible later
    each cadence, honoring Glue's per-run minimum billing duration (confirm the exact
    minimum against AWS docs at slice 8 — do not assume). Result is `DERIVED`, with
    both measured durations recorded.
+   **Checked 2026-11-12 (M-064):** the pricing page states per-second billing and no minimum for
+   Spark ETL. Every step billed ≥ 117 s, so a minimum of up to 1 minute would change nothing.
 
 2. **Monthly volume.** Measure bars/day over ≥3 complete days, report the measured
    daily figure, and label any monthly number `EXTRAPOLATED`. Note that the
@@ -1395,6 +1473,7 @@ Resolved as we reach each stage. Recorded here so the reasoning is visible later
    Gold is dominated by the hourly batch window, so it ranges from roughly the Glue
    runtime to that plus ~60 minutes. Report p50 and max over ≥20 bars, never the
    minimum alone.
+   **Done 2026-11-12 (M-064):** p50 42.52 min, max 74.84 min over 1,380 minutes.
 
 4. **Anomaly firing rate.** Must be recorded with `k`, the window length, and the
    symbol set. A rate measured on a basket containing PEPE/SHIB is not the same

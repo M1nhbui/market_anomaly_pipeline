@@ -1152,3 +1152,20 @@ AWS's own definition validator accepted the result. Then TestState ran the deplo
 - **Daily, permanent:** 00:30 UTC from 2026-11-13. The start/end dates come from one Terraform variable, `measurement_window_start`, so the window was placed deliberately.
 
 **How it was proven.** Predictions for the whole window were logged first (M-064). Then the first scheduled run fired at 06:00:18 UTC, nobody touching anything, and succeeded in 11.35 min with the gate passing (M-065). Two first-run misses are written down instead of waved off: Gold took 218 s against a predicted 175–200 s, and the run cost $0.149 against $0.12–0.14. Whether those hold across 24 runs is ticket #6's question.
+
+---
+
+## 2026-11-12 — Ticket #6: the measurement window, measured
+
+**What happened.** For 24 hours the pipeline ran itself every hour with nobody touching it. **24 of 24 runs succeeded**, the gate passed all 24 (192 of 192 checks, no warnings), nothing was retried, and no alert email was sent. The hourly schedule then stopped on its own end date, as designed.
+
+**The numbers (M-064)**, built by a new script, `scripts/measure_window.py`, whose data-delay logic was written test-first:
+- **Data delay: p50 42.5 min, max 74.8 min.** Both inside the predictions. This is the honest answer to "how long until a minute of market data shows up in Gold, on an hourly cadence?"
+- **Run duration: p50 11.69 min**, range 9.2–13.8 min.
+- **Cost: p50 $0.149 per run**, $3.51 of Glue for the window.
+
+**The misses, kept.** Most of the *range* predictions were too narrow: duration, Silver, Gold, cost, freshness and polling lag each had runs outside them. The pattern behind it: Glue's run-to-run spread (Gold anywhere from 117 to 279 s) is bigger than I assumed from 3 hand-started runs. One predicted trend held: Silver did get slower later in the day (median 387.5 s in the morning UTC vs 436.5 s in the evening). The other didn't show: Gold didn't creep up (173 s vs 176 s by half). S3 request charges were left out of the cost model entirely, and Cost Explorer shows them.
+
+**Budget.** The window and the backfill set off the *forecast* budget alert (AWS forecast $45.93, extrapolated from the two expensive days; M-066). The realistic November total is ≈ $12–13 (ESTIMATED) against the $10 budget. The owner chose to accept the overrun and keep daily runs from Nov 13.
+
+**Still open on #6:** confirm the first daily run (2026-11-13 00:30 UTC) and record Cost Explorer's figure for the window days.
