@@ -1477,6 +1477,25 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   - **CloudWatch, 08:50–09:30 UTC:** rule `Invocations` 1, `FailedInvocations` none; SNS
     `NumberOfMessagesPublished` 2, `NumberOfNotificationsDelivered` 2. **One email per path ✅.**
 
+### M-068 — Scheduler start-failure alarm (ticket #10): baseline and prediction
+- **Baseline (MEASURED, CloudWatch `AWS/Scheduler`, ScheduleGroup `default`, daily sums):**
+  **23,140** `InvocationAttemptCount` from 2026-08-22 to 2026-11-10 (81 daily data points), and
+  **no `InvocationDroppedCount` data point** in the same 81 days. Query: `get-metric-statistics
+  --namespace AWS/Scheduler --dimensions Name=ScheduleGroup,Value=default --period 86400
+  --statistics Sum`, once per metric. The zero is a real zero, not a wrong dimension: the
+  identical query for `InvocationAttemptCount` returns the 23,140. (`list-metrics`, which covers
+  only about the last 2 weeks, also lists no dropped metric.)
+  - **All 23,140 are ingestion (DERIVED):** the transform schedules first fired 2026-11-11 06:00
+    UTC, after this window ends. 81 days × 288/day = 23,328 is the ceiling; the first day was
+    partial.
+  - **Alarms before this ticket (MEASURED, `describe-alarms`):** 0.
+- **Prediction (logged before the live test, 2026-11-12):** after apply, the alarm sits in OK
+  (`treat_missing_data = notBreaching`). Forcing it to ALARM with `aws cloudwatch
+  set-alarm-state` sends **exactly one** email through the pipeline topic, proving the new
+  topic-policy statement for `cloudwatch.amazonaws.com`. Without that statement the publish
+  would be refused, because ticket #9 replaced the default topic policy.
+- **Live test:** _pending (after apply, with the owner's go-ahead)._
+
 ---
 
 ## Open measurement-design questions

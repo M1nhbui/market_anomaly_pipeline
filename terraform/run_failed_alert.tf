@@ -55,28 +55,5 @@ resource "aws_cloudwatch_event_target" "run_failed_alert" {
   }
 }
 
-# EventBridge publishes as a SERVICE, not an IAM role in this account, so the topic
-# itself must grant it, limited to this one rule by aws:SourceArn. This replaces AWS's
-# default topic policy. That is safe: within one account, the Step Functions role's own
-# IAM policy is enough to publish, and the email subscription doesn't depend on it.
-data "aws_iam_policy_document" "pipeline_alerts_topic" {
-  statement {
-    sid       = "RunFailedRulePublishes"
-    actions   = ["SNS:Publish"]
-    resources = [aws_sns_topic.pipeline_alerts.arn]
-    principals {
-      type        = "Service"
-      identifiers = ["events.amazonaws.com"]
-    }
-    condition {
-      test     = "ArnEquals"
-      variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_event_rule.run_failed_alert.arn]
-    }
-  }
-}
-
-resource "aws_sns_topic_policy" "pipeline_alerts" {
-  arn    = aws_sns_topic.pipeline_alerts.arn
-  policy = data.aws_iam_policy_document.pipeline_alerts_topic.json
-}
+# The topic's access policy, which grants this rule's publish, lives beside the topic in
+# step_functions.tf.

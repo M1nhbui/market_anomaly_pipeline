@@ -58,7 +58,7 @@ resource "aws_scheduler_schedule" "transform_daily" {
     # Retries here only cover failing to START an execution. Failures inside a run
     # are the state machine's job (ticket #3). A start more than 5 minutes late is
     # dropped; tomorrow's run catches up thanks to the 26-hour lookback. A dropped
-    # start is not yet alerted on (ticket #10).
+    # start emails through the alarm in scheduler_alarm.tf (ticket #10).
     retry_policy {
       maximum_retry_attempts       = 2
       maximum_event_age_in_seconds = 300

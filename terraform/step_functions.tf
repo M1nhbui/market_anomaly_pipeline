@@ -95,3 +95,46 @@ resource "aws_sns_topic_subscription" "pipeline_alerts_email" {
   protocol  = "email"
   endpoint  = var.alert_email
 }
+
+# WHO MAY PUBLISH. Same-account IAM roles (the Step Functions role) publish through
+# their own IAM policies and need nothing here. AWS SERVICES publish as service
+# principals, so the topic itself must grant each one, pinned by aws:SourceArn to the
+# exact rule or alarm, so no other rule or alarm in the account can use this topic.
+# Setting this replaces AWS's default topic policy: add a statement here for every new
+# service publisher, or its alerts are silently refused.
+data "aws_iam_policy_document" "pipeline_alerts_topic" {
+  statement {
+    sid       = "RunFailedRulePublishes"
+    actions   = ["SNS:Publish"]
+    resources = [aws_sns_topic.pipeline_alerts.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_cloudwatch_event_rule.run_failed_alert.arn]
+    }
+  }
+
+  statement {
+    sid       = "SchedulerDroppedAlarmPublishes"
+    actions   = ["SNS:Publish"]
+    resources = [aws_sns_topic.pipeline_alerts.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_cloudwatch_metric_alarm.scheduler_invocation_dropped.arn]
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "pipeline_alerts" {
+  arn    = aws_sns_topic.pipeline_alerts.arn
+  policy = data.aws_iam_policy_document.pipeline_alerts_topic.json
+}
