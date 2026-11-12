@@ -8,3 +8,9 @@ The README designed the transform chain to run hourly, indefinitely. We run it h
 - **Freshness of the output:** Gold is up to about a day old outside the window. That is acceptable for a review filter.
 - **Measurement:** the hourly design's claims (run duration, data delay, gate pass rate, cost per run) are measured once, with n = 24, rather than demonstrated continuously.
 - **Gold stays a full rebuild:** it rescores all of Silver on every run (133 s over 79 days). Making it incremental is deferred until per-run measurements show the rebuild becoming too slow.
+
+## Update, 2026-11-12: the window ran and was removed
+
+The window ran 24/24 runs from 2026-11-11 06:00 to 2026-11-12 05:00 UTC (M-064). The measured cost is p50 $0.1493 per run, higher than the $0.108 above (M-060): the 26-hour lookback roughly doubled Silver (M-063). Hourly forever would now cost about $107 a month and daily about $4.47 (M-064, DERIVED), so the decision stands.
+
+The hourly schedule and its window variable were then deleted (ticket #8). The daily schedule has no start date of its own and fires at the next 00:30 UTC. To measure an hourly cadence again, restore the window schedule from git history with a new start date.

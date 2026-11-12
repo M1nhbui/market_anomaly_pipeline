@@ -59,13 +59,3 @@ output "pipeline_alerts_topic_arn" {
   description = "SNS topic the transform chain emails on a blocked gate or a failed step."
   value       = aws_sns_topic.pipeline_alerts.arn
 }
-
-output "measurement_window" {
-  description = "The hourly measurement window's schedule bounds and the first daily run."
-  value = {
-    first_hourly_run = var.measurement_window_start
-    schedule_opens   = local.window_open
-    schedule_closes  = local.window_close
-    daily_from       = local.daily_start
-  }
-}

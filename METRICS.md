@@ -1386,6 +1386,8 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
     it states is "1 minute minimum billing duration" for Data Quality tasks. Whether an unstated
     1-minute minimum applies is not confirmed. Both jobs are Glue 5.0, G.1X × 2. The shortest billed step was
     117 s, so a minimum of up to 1 minute would not change any figure here.
+  - **Monthly projection (DERIVED from the p50, Glue only):** hourly 720 × $0.1493 =
+    $107.49/month; daily 30 × $0.1493 = $4.47/month. Used by ADR-0002's 2026-11-12 update.
   - **Cost Explorer confirmation:** _pending (the window's days are still landing)._
   - **Per run:**
 
