@@ -1450,6 +1450,21 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   ~$0.17 and S3 storage. The owner chose to accept the overrun rather than delay the daily
   schedule to Dec 1 (≈ $9.6).
 
+### M-067 — Run-failed alert rule (ticket #9): pattern checked against AWS's matcher
+- **Prediction (logged before the live test, 2026-11-12):** a chain execution started with input
+  `[1]` fails at the merge with `States.Runtime` before any Glue job or Lambda runs. It sends
+  **exactly one** email, from the new rule, and nothing from the chain's alert states.
+- **Pattern check (MEASURED, `aws events test-event-pattern`, 2026-11-12): 10/10 as designed.**
+  - Email: FAILED with `States.Runtime`; TIMED_OUT (`States.Timeout`); ABORTED (error null);
+    FAILED with an unseen error (`Something.New`)
+  - No email: FAILED with `GateBlocked`, `StepFailed` or `InvalidLookback`; SUCCEEDED; RUNNING;
+    FAILED `States.Runtime` from another state machine
+- **Offline:** `tests/test_run_failed_alert.py` keeps the skip-list equal to the chain's Fail
+  errors. A sabotage (dropping `InvalidLookback`) made it fail.
+- **The trigger works as expected (MEASURED, TestState, 2026-11-12):** `States.JsonMerge` with a
+  non-object argument → `States.Runtime`, "Invalid arguments in States.JsonMerge".
+- **Live test:** _pending (after apply, with the owner's go-ahead)._
+
 ---
 
 ## Open measurement-design questions

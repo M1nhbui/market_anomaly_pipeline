@@ -1169,3 +1169,25 @@ AWS's own definition validator accepted the result. Then TestState ran the deplo
 **Budget.** The window and the backfill set off the *forecast* budget alert (AWS forecast $45.93, extrapolated from the two expensive days; M-066). The realistic November total is ≈ $12–13 (ESTIMATED) against the $10 budget. The owner chose to accept the overrun and keep daily runs from Nov 13.
 
 **Still open on #6:** confirm the first daily run (2026-11-13 00:30 UTC) and record Cost Explorer's figure for the window days.
+
+---
+
+## 2026-11-11 — How we work changed: skills first, then a review that found real gaps
+
+**The process.** The owner noticed that tickets #2–#5 had been specced, ticketed and built by hand, without Matt Pocock's skills, and that none had a code review. Two rules went into CLAUDE.md:
+- the owner commits and pushes
+- Claude names the skill to type at every stage
+
+The full map lives in `docs/agents/skill-flow.md`: `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement` → `/code-review` → commit → `/retro`, plus trigger moments such as `/diagnosing-bugs` on an alert. Several of these skills can only be started by the owner, which is why they had gone unused.
+
+**The catch-up review.** `/code-review since 1d5c726` reviewed #2–#5 together against spec #1 and raised 10 findings. Each was checked against the code. `/triage` then filed six tickets (#8–#13) and closed three findings as accepted, with reasons in a comment on #1. The most serious finding: the permanent daily schedule took its start date from the one-off window variable, so the next `terraform apply` would either prompt, restart a paid window, or send a past date (#8). The most surprising: "every failure emails" was false, because `States.ALL` doesn't catch `States.Runtime` (#9).
+
+---
+
+## 2026-11-12 — Ticket #8: the window is gone, the daily schedule stands on its own
+
+The hourly window schedule, its two variables and its output were deleted once the 24 runs were measured. The daily 00:30 UTC schedule lost its `start_date`, so a cron schedule simply fires at the next 00:30. Plan showed exactly one destroy and one in-place update, and nothing was replaced. AWS now lists only the ingestion and daily schedules.
+
+**Two review catches:**
+- A daily-cost figure was rounded up ($4.48 → $4.47).
+- Cost numbers were copied into both the ADR and the Terraform header. The header now points to ADR-0002 instead, so the numbers live in one place.

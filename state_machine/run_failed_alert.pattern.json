@@ -1,0 +1,14 @@
+{
+  "source": ["aws.states"],
+  "detail-type": ["Step Functions Execution Status Change"],
+  "detail": {
+    "stateMachineArn": ["${state_machine_arn}"],
+    "$or": [
+      { "status": ["TIMED_OUT", "ABORTED"] },
+      {
+        "status": ["FAILED"],
+        "error": [{ "anything-but": ["GateBlocked", "StepFailed", "InvalidLookback"] }]
+      }
+    ]
+  }
+}
