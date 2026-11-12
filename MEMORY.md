@@ -1206,3 +1206,22 @@ The hourly window schedule, its two variables and its output were deleted once t
 - A dry run of the gate-blocked alert proved the topic-policy swap didn't break the chain's own email.
 
 **The prediction missed in an instructive way.** I expected `States.Runtime`; the run died one state earlier with `States.ReferencePathConflict`. A rule that listed only `States.Runtime` would have stayed silent. Because the rule matches "anything the chain didn't raise", it caught an error name nobody had predicted.
+
+---
+
+## 2026-11-12 — Ticket #10: a run that never starts now emails too
+
+**The gap.** If EventBridge Scheduler can't start a run, it retries and then drops it. No execution exists, so neither the chain's emails (#3) nor the run-failed rule (#9) can see it. The daily run could silently stop happening.
+
+**The fix.** A CloudWatch alarm on `InvocationDroppedCount` for the schedules' group. One alarm covers both the daily transform and the 5-minute ingestion, because AWS only breaks the metric down by schedule group. It looks back over the last hour, so a late data point still counts. It treats missing data as OK, and emails only when something is wrong. Baseline: 23,140 invocations since August, none dropped (M-068).
+
+**The IAM lesson.** In #9 the alert topic's default policy was replaced with one that let only the EventBridge rule publish. A CloudWatch alarm also publishes as an AWS service, so without its own statement in the topic policy, its email would have been silently refused. The policy now lives beside the topic, with a comment that every new service publisher needs a statement there. The live test (forced ALARM → exactly one email delivered) proved the statement works.
+
+**Review catches.** `/code-review` raised 8 findings; 5 were fixed:
+- The single 5-minute evaluation window could miss late metrics.
+- The schedule group was hard-coded.
+- One comment was stale.
+- One comment was wrong about what a "drop" means.
+- The baseline query wasn't recorded.
+
+Three were declined with reasons: an HCL-parsing test, dead-letter-queue metrics nobody uses, and an unrelated file.

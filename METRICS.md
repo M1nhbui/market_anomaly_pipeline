@@ -1494,7 +1494,16 @@ What becomes measurable at each slice. Nothing is filled in until it is actually
   set-alarm-state` sends **exactly one** email through the pipeline topic, proving the new
   topic-policy statement for `cloudwatch.amazonaws.com`. Without that statement the publish
   would be refused, because ticket #9 replaced the default topic policy.
-- **Live test:** _pending (after apply, with the owner's go-ahead)._
+- **Live test (MEASURED, 2026-11-12 20:27 UTC, owner's go-ahead):**
+  - Right after apply the alarm was **INSUFFICIENT_DATA, not OK ❌ (small miss)**. A new alarm
+    has no state until its first evaluation; `notBreaching` only applies from then on.
+  - `set-alarm-state ALARM`: alarm history shows "Successfully executed action" on the pipeline
+    topic at 20:27:20 UTC. SNS `NumberOfMessagesPublished` 1, `NumberOfNotificationsDelivered`
+    1, `NumberOfNotificationsFailed` 0. **Exactly one email ✅**, which proves the
+    `cloudwatch.amazonaws.com` statement in the topic policy.
+  - Reset to OK by hand right after. An alarm emails only on a *transition* into ALARM, so if
+    it were left in ALARM a real drop would send nothing. The reset sends no email, because
+    there is no OK action.
 
 ---
 
